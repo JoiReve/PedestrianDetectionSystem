@@ -1,0 +1,17 @@
+# 忽略 CMake 构建目录
+build/
+
+# 忽略 Python 虚拟环境
+venv/
+
+# 忽略 PyTorch 权重文件（体积大，可通过脚本导出）
+*.pt
+
+# 忽略 Python 缓存
+__pycache__/
+*.py[cod]
+
+# 忽略 IDE 和系统文件
+.vscode/
+.idea/
+.DS_Store
