@@ -1,9 +1,12 @@
 # PedestrianDetectionSystem
 
-> v0.1 —— 基于 **YOLOv8n (ONNX) + OpenCV DNN** 的 C++ 行人检测系统，支持对**单张图片**做检测并可视化结果。
+> **v0.2.0** —— 基于 **YOLOv8n (ONNX) + OpenCV DNN** 的 C++ 行人检测系统，支持**图片**与**视频**输入。
 
-一个从零手写完整推理流水线的学习型项目：不依赖 OpenCV 的高层封装（`DetectionModel`），
-LetterBox 预处理、YOLOv8 输出解码、NMS 后处理全部自己实现，适合作为理解「深度学习模型部署」的最小可运行范例。
+---
+
+一个从零手写完整推理流水线的学习型项目：不依赖 OpenCV 的高层封装（`DetectionModel`），LetterBox 预处理、YOLOv8 输出解码、NMS 后处理全部自己实现。
+
+v0.2 在检测能力之上补了一层**统一输入抽象**（`FrameReader` + 工厂），让同一套推理代码同时服务图片和视频 —— 既适合作为理解「深度学习模型部署」的最小可运行范例，也是一个观察设计模式如何落地的小样本。
 
 ---
 
@@ -12,58 +15,139 @@ LetterBox 预处理、YOLOv8 输出解码、NMS 后处理全部自己实现，�
 - [PedestrianDetectionSystem](#pedestriandetectionsystem)
   - [目录](#目录)
   - [功能特性](#功能特性)
+  - [演示](#演示)
+  - [技术栈](#技术栈)
   - [环境依赖](#环境依赖)
+  - [安装](#安装)
+    - [1. 编译工具](#1-编译工具)
+    - [2. OpenCV](#2-opencv)
+    - [3. Python 环境（仅重新导出模型时需要）](#3-python-环境仅重新导出模型时需要)
   - [快速开始](#快速开始)
     - [1. 编译](#1-编译)
     - [2. 运行](#2-运行)
+    - [3. 按键](#3-按键)
   - [工作原理](#工作原理)
+    - [整体数据流](#整体数据流)
+    - [推理流水线（每个输入帧都走一遍）](#推理流水线每个输入帧都走一遍)
+    - [几个关键设计点](#几个关键设计点)
   - [模型准备](#模型准备)
   - [代码结构](#代码结构)
+    - [类关系](#类关系)
     - [核心 API](#核心-api)
-  - [已知限制与路线图](#已知限制与路线图)
-    - [v0.1 当前限制](#v01-当前限制)
-    - [v0.2 计划](#v02-计划)
+  - [能力边界](#能力边界)
+    - [当前局限](#当前局限)
+    - [暂时不考虑的方向](#暂时不考虑的方向)
+    - [下一步](#下一步)
   - [学习资料](#学习资料)
+  - [更新记录](#更新记录)
+  - [贡献](#贡献)
+  - [License](#license)
   - [致谢](#致谢)
+  - [联系](#联系)
 
 ---
 
 ## 功能特性
 
+- **图片 / 视频统一输入**：`FrameReader` 抽象接口 + `FrameReaderFactory` 工厂按扩展名自动分派，`main` 只需一条帧循环
 - **完整手写推理流水线**：LetterBox 预处理 → `blobFromImage` 归一化 → 前向推理 → 输出解码 → NMS 去重 → 结果绘制
 - **单类别检测**：只保留 COCO 的 `person` 类（`class_id = 0`），过滤其余 79 类
-- **坐标精确还原**：通过 `LetterBoxInfo` 记录缩放/填充量，将 640×640 网络坐标系下的框精确映射回原图
-- **可配置阈值**：置信度阈值与 NMS IoU 阈值可在构造时指定（默认 `0.5` / `0.45`）
-- **零拷贝优化**：解码阶段用「包裹外部内存的 Mat 头」读取分数，避免逐框拷贝
+- **坐标精确还原**：通过 `LetterBoxInfo` 记录缩放 / 填充量，将 640×640 网络坐标系下的框精确映射回原图
+- **集中式配置**：模型路径、源路径、置信度 / NMS 阈值、输入尺寸、类别号统一收敛到 `ProjConfig`
+- **模型只加载一次**：`PedestrianDetector` 在帧循环外构造，视频逐帧复用同一个 `cv::dnn::Net`
+- **零拷贝解码**：解码阶段用「包裹外部内存的 Mat 头」读取分数，避免逐框拷贝
 
 ---
 
+## 演示
+
+![视频截图运行示例](docs/PDExample.png)
+
+输入图片或视频跑一遍的效果：每帧用红框标出行人，框上方的文字是置信度标签 —— 图片与视频共用同一条推理流水线。
+
+## 技术栈
+
+| 层次             | 技术                                       | 在本项目中的用途                                             |
+| ---------------- | ------------------------------------------ | ------------------------------------------------------------ |
+| 语言 / 标准      | C++17                                      | 全部运行时代码                                               |
+| 构建             | CMake ≥ 3.10                               | 编译与链接，无额外的第三方构建依赖                           |
+| 视觉库           | OpenCV 5.1.0                               | `core` / `imgproc`（LetterBox、绘图）、`imgcodecs`（`imread`）、`videoio`（`VideoCapture`）、`highgui`（`imshow` / `waitKey`） |
+| 推理             | OpenCV DNN                                 | `readNetFromONNX` + `forward`，默认 OpenCV 后端 + CPU        |
+| 模型             | YOLOv8n（ONNX）                            | ultralytics COCO 预训练权重导出，输入 640×640，输出 `[1, 84, 8400]` |
+| 后处理           | 手写实现                                   | 输出解码、LetterBox 坐标逆变换、`cv::dnn::NMSBoxes` 去重     |
+| 模型导出（可选） | Python 3.12 + ultralytics + PyTorch + onnx | 仅在重新导出 ONNX 时用到，不参与运行时                       |
+
 ## 环境依赖
 
-| 依赖 | 版本（本项目验证环境） | 说明 |
-|---|---|---|
-| C++ 标准 | C++17 | `CMakeLists.txt` 中指定 |
-| CMake | ≥ 3.10 | |
-| OpenCV | 5.1.0（自编译于 `/usr/local`） | 需含 `dnn`、`highgui`、`imgcodecs` 模块 |
-| 编译器 | g++ (GCC) | |
+| 依赖     | 版本（本项目验证环境）         | 说明                                                   |
+| -------- | ------------------------------ | ------------------------------------------------------ |
+| C++ 标准 | C++17                          | `CMakeLists.txt` 中指定                                |
+| CMake    | ≥ 3.10                         |                                                        |
+| OpenCV   | 5.1.0（自编译于 `/usr/local`） | 需含 `dnn`、`highgui`、`imgcodecs`、**`videoio`** 模块 |
+| 编译器   | g++ (GCC)                      |                                                        |
 
 > ⚠️ **关于 OpenCV 版本**：本项目实际编译链接的是自编译的 **OpenCV 5.1.0**（`/usr/local/lib/cmake/opencv5`）。
 > 系统包管理器安装的 OpenCV 4.6.0（`/usr/include/opencv4`）**未被使用**。
 > 若 CMake 找错了版本，请显式指定：
+>
 > ```bash
 > cmake -S . -B build -DOpenCV_DIR=/usr/local/lib/cmake/opencv5
 > ```
 
 模型导出脚本另需 Python 环境（项目自带 `venv/`）：
 
-| 依赖 | 版本 |
-|---|---|
-| Python | 3.12.3 |
+| 依赖        | 版本    |
+| ----------- | ------- |
+| Python      | 3.12.3  |
 | ultralytics | 8.4.161 |
-| torch | 2.14.0 |
-| onnx | 1.23.0 |
+| torch       | 2.14.0  |
+| onnx        | 1.23.0  |
 
 ---
+
+## 安装
+
+除 OpenCV 外没有需要下载的第三方 C++ 依赖，装好编译工具与 OpenCV 即可。
+
+### 1. 编译工具
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake
+```
+
+### 2. OpenCV
+
+需要含 `dnn`、`imgcodecs`、`videoio`、`highgui` 模块的 OpenCV。本项目在**自编译的 OpenCV 5.1.0**（安装到 `/usr/local`）上验证：
+
+```bash
+# 以 OpenCV 5.x 源码为例：只编译用得到的模块，能显著缩短编译时间
+cmake -S <opencv_src> -B <opencv_build> \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DBUILD_LIST=core,imgproc,imgcodecs,highgui,videoio,dnn
+cmake --build <opencv_build> -j"$(nproc)"
+sudo cmake --install <opencv_build>
+```
+
+编译本项目时若 CMake 找到的不是这一份，显式指定路径：
+
+```bash
+cmake -S . -B build -DOpenCV_DIR=/usr/local/lib/cmake/opencv5
+```
+
+> 发行版自带的 OpenCV 4.x（`sudo apt install libopencv-dev`）API 兼容、通常也能编译通过，但不是本项目的实测环境 —— 见[环境依赖](#环境依赖)的版本说明。
+
+### 3. Python 环境（仅重新导出模型时需要）
+
+仓库已包含导出好的 `models/yolov8n.onnx`，日常使用**不需要**这一步：
+
+```bash
+python3 -m venv venv
+venv/bin/pip install ultralytics==8.4.161 onnx==1.23.0   # PyTorch 作为 ultralytics 的依赖一并安装
+```
+
+环境就绪后，继续 [快速开始](#快速开始) 编译并运行。
 
 ## 快速开始
 
@@ -76,34 +160,78 @@ cmake --build build -j
 
 产物：`build/pedestrian_detection_system`
 
+> 当前 `build/` 缓存是 **Debug** 配置（`CMAKE_BUILD_TYPE=Debug`），推理速度非最优。
+> 做性能对比前先切 Release：`cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j`。
+
 ### 2. 运行
 
 ```bash
-./build/pedestrian_detection_system <模型路径.onnx> <图片路径>
+./build/pedestrian_detection_system <模型路径.onnx> <源路径>
 ```
 
-例如：
+**源路径可以是图片，也可以是视频** —— 程序按扩展名自动识别（图片：`jpg/jpeg/png/bmp/tif/tiff/webp/ppm/pgm`；视频：`mp4/avi/mov/mkv/flv/wmv/webm/m4v`）。
 
 ```bash
-./build/pedestrian_detection_system models/yolov8n.onnx test.jpg
+# 图片
+./build/pedestrian_detection_system models/yolov8n.onnx 图片路径
+
+# 视频
+./build/pedestrian_detection_system models/yolov8n.onnx 视频路径
 ```
 
-运行后会弹出一个窗口显示标注结果（红框 + `person 0.87` 形式的置信度标签），按任意键关闭。
+- **图片模式**：弹窗显示标注结果，按 ESC 或任意键后程序结束。
+- **视频模式**：逐帧检测并实时显示（红框 + `person: 0.87` 形式的置信度标签），按 **ESC** 提前退出，视频播完自动结束。
 
 > **注意**：程序通过 `cv::imshow` 显示结果，需要图形界面环境（X11 / Wayland）。
-> 在无头服务器或 SSH 环境中会失败，可改为 `cv::imwrite("result.jpg", image)` 输出到文件。
+> 在无头服务器或 SSH 环境中会失败，可改为 `cv::imwrite("result.jpg", frame)` 输出到文件。
+
+### 3. 按键
+
+| 按键  | 行为                                 |
+| ----- | ------------------------------------ |
+| `ESC` | 退出（图片模式下任意键都会结束等待） |
+
+> `q` 键退出、暂停 / 单帧步进 / 截图都排在后面的方向里（见 [docs/roadmap.md](docs/roadmap.md)）。
 
 ---
 
 ## 工作原理
 
+### 整体数据流
+
 ```mermaid
 flowchart TD
-    IN["输入图片路径<br/>argv[2]"]
-    LOAD["cv::imread<br/>BGR · CV_8UC3"]
+    IN["命令行参数<br/>argv[1] 模型 · argv[2] 源路径"] --> CFG["ProjConfig<br/>集中配置"]
+    CFG --> DET{"detectSourceType()<br/>按扩展名判断"}
+
+    DET -->|Image| IR["ImageFrameReader"]
+    DET -->|Video| VR["VideoFrameReader<br/>封装 cv::VideoCapture"]
+    DET -->|Unknown| ERR["报错退出"]
+
+    IR --> FR["unique_ptr&lt;FrameReader&gt;<br/>工厂返回抽象基类"]
+    VR --> FR
+    FR --> LOOP["while (fr-&gt;read(frame))<br/>统一帧循环"]
+
+    CFG --> PD["PedestrianDetector<br/>加载 ONNX（仅一次）"]
+    LOOP --> DETECT["detect(frame)<br/>见下方推理流水线"]
+    PD --> DETECT
+    DETECT --> DRAW["drawDetections<br/>rectangle + putText"]
+    DRAW --> SHOW["imshow + waitKey<br/>ESC 退出"]
+    SHOW --> LOOP
+    LOOP --> END["fr-&gt;release()<br/>destroyAllWindows"]
+```
+
+**图片和视频的差别被完全关在了工厂内部**：`main` 拿到的只是一个 `FrameReader`，调用同样的 `open/read/release`。
+`ImageFrameReader::read` 只成功一次（内部 `isUsed_` 标志），`VideoFrameReader::read` 一帧一帧读到 `VideoCapture` 返回 `false` 为止 —— 两者都被 `while (fr->read(frame))` 这一个协议统一。
+
+### 推理流水线（每个输入帧都走一遍）
+
+```mermaid
+flowchart TD
+    LOAD["输入帧<br/>BGR · CV_8UC3<br/>来自 imread 或 VideoCapture"]
 
     subgraph S1["preprocess() · LetterBox 预处理"]
-        P1["scale = min(640/W, 640/H)<br/>等比缩放，保持长宽比"]
+        P1["scale = min(W_in/w, H_in/h)<br/>等比缩放，保持长宽比"]
         P2["居中填充 114 灰边<br/>→ 640 × 640 画布"]
         P3["输出 LetterBoxInfo<br/>scale / pad_w / pad_h"]
         P1 --> P2 --> P3
@@ -130,31 +258,38 @@ flowchart TD
 
     subgraph S5["main.cpp · 绘制与显示"]
         D1["cv::rectangle + cv::putText"]
-        D2["cv::imshow → cv::waitKey(0)"]
+        D2["cv::imshow → cv::waitKey(delay)"]
         D1 --> D2
     end
 
-    IN --> LOAD --> P1
+    LOAD --> P1
     P3 --> B1
     B3 --> F1
     F1 --> O1
     O4 --> D1
-    D2 --> OUT["标注结果图"]
+    D2 --> OUT["标注结果帧"]
     P3 -. "坐标逆变换依据" .-> O3
 ```
 
-**几个关键设计点：**
+### 几个关键设计点
 
 - **为什么要 LetterBox 而不用 `blobFromImage` 直接 resize？**
-  `blobFromImage` 内部是**拉伸**而非等比缩放，会破坏长宽比，导致框位置系统性偏移。
-  所以先手工等比缩放 + 填充，再让 `blobFromImage` 做一次"尺寸恰好是 640×640"的空 resize。
+	`blobFromImage` 内部是**拉伸**而非等比缩放，会破坏长宽比，导致框位置系统性偏移。
+	所以先手工等比缩放 + 填充，再让 `blobFromImage` 做一次"尺寸恰好是 640×640"的空 resize。
 
 - **为什么灰边是 114？**
-  YOLO 系列训练时的固定填充值，推理端必须与训练端一致。
+	YOLO 系列训练时的固定填充值，推理端必须与训练端一致。
 
 - **`LetterBoxInfo` 的作用**
-  正变换 `x' = x·scale + pad`，逆变换 `x = (x' - pad) / scale`。
-  预处理与后处理共享同一个 `lb_info`，这是坐标能精确还原的保证。
+	正变换 `x' = x·scale + pad`，逆变换 `x = (x' - pad) / scale`。
+	预处理与后处理共享同一个 `lb_info`，这是坐标能精确还原的保证。
+
+- **模型为什么只加载一次？**
+	`readNetFromONNX` 会解析计算图 + 载入权重，是**数百毫秒级**的开销；
+	视频模式下把它放在帧循环**之外**（`main` 在进入 `while (fr->read(frame))` 之前构造 `PedestrianDetector`）是性能上的必要选择。
+
+- **视频每帧都要重建 letterbox 画布和 blob**，这是当前的主要开销点之一；
+	同一视频的 `scale/pad` 恒定，具备"算一次、用 N 帧"的优化空间（属于性能方向，见 [docs/roadmap.md](docs/roadmap.md)）。
 
 ---
 
@@ -175,10 +310,12 @@ venv/bin/python scripts/export_onnx.py
 
 **输入输出规格：**
 
-| | 形状 | 类型 | 说明 |
-|---|---|---|---|
+|      | 形状                | 类型     | 说明                |
+| ---- | ------------------- | -------- | ------------------- |
 | 输入 | `1 × 3 × 640 × 640` | `CV_32F` | RGB, 归一化到 [0,1] |
-| 输出 | `1 × 84 × 8400` | `CV_32F` | 未解码的原始预测头 |
+| 输出 | `1 × 84 × 8400`     | `CV_32F` | 未解码的原始预测头  |
+
+> ⚠️ 输入尺寸 `640` 需要与三处保持一致：`ProjConfig::input_width/input_height`（代码侧）、letterbox 画布尺寸（由 config 派生）、`export_onnx.py` 的 `imgsz`（导出侧）。目前**没有机制保证**三者同步，改模型输入尺寸时务必手动核对。
 
 ---
 
@@ -186,34 +323,103 @@ venv/bin/python scripts/export_onnx.py
 
 ```
 PedestrianDetectionSystem/
-├── CMakeLists.txt              # 构建配置
+├── CMakeLists.txt                  # 构建配置
 ├── README.md
+├── PDExample.png                   # 演示截图（README「演示」节引用）
+├── LICENSE                         # AGPL-3.0 全文
 ├── include/
-│   └── PedestrianDetector.hpp  # 类声明：LetterBoxInfo / Detection / PedestrianDetector
+│   ├── ProjConfig.hpp              # 集中配置：路径 / 阈值 / 输入尺寸 / 类别号
+│   ├── PedestrianDetector.hpp      # 检测器：LetterBoxInfo / Detection / PedestrianDetector
+│   ├── FrameReader.hpp             # 【抽象接口】open / read / release / isOpened
+│   ├── ImageFrameReader.hpp        # 图片源：一次性读取（isUsed_ 标志）
+│   ├── VideoFrameReader.hpp        # 视频源：封装 cv::VideoCapture，逐帧读取
+│   └── FrameReaderFactory.hpp      # 工厂：detectSourceType + createFrameReader
 ├── src/
-│   ├── PedestrianDetector.cpp  # 核心实现：preprocess / postprocess / detect
-│   └── main.cpp                # 命令行入口：读图 → 检测 → 绘制 → 显示
+│   ├── main.cpp                    # 装配与帧循环：创建 → 打开 → 循环检测绘制显示
+│   ├── PedestrianDetector.cpp      # 核心实现：preprocess / postprocess / detect
+│   ├── ImageFrameReader.cpp
+│   ├── VideoFrameReader.cpp
+│   └── FrameReaderFactory.cpp      # 扩展名表 + switch 创建
 ├── models/
-│   ├── yolov8n.onnx            # 推理用 ONNX 模型（12.8 MB）
+│   ├── yolov8n.onnx                # 推理用 ONNX 模型（12.8 MB）
 │   └── face_detection/
-│       └── yolov8n.pt          # ultralytics PyTorch 权重（导出源）
+│       └── yolov8n.pt              # ultralytics PyTorch 权重（导出源）
 ├── scripts/
-│   └── export_onnx.py          # .pt → .onnx 导出脚本
-├── docs/
-│   └── opencv-notes.md         # OpenCV 学习笔记（强烈推荐阅读）
-├── venv/                       # Python 虚拟环境（模型导出用）
-└── build/                      # CMake 构建目录
+│   └── export_onnx.py              # .pt → .onnx 导出脚本
+├── docs/                           # 学习笔记（强烈推荐阅读）
+│   ├── opencv-notes.md             # OpenCV：Mat / I/O / 几何变换 / DNN / VideoCapture
+│   ├── factory-pattern.md          # 设计模式：工厂模式（FrameReaderFactory 实例）
+│   ├── cpp-oop-notes.md            # C++：接口 / 多态 / RAII / 所有权
+│   └── roadmap.md                  # 路线图：方向性说明（粗粒度，非承诺）
+├── venv/                           # Python 虚拟环境（模型导出用）
+└── build/                          # CMake 构建目录
+```
+
+### 类关系
+
+```mermaid
+classDiagram
+    direction LR
+    class FrameReader {
+        <<抽象接口>>
+        +open() bool
+        +read(frame) bool
+        +release() void
+        +isOpened() bool
+    }
+    class ImageFrameReader {
+        +ImageFrameReader(cfg)
+    }
+    class VideoFrameReader {
+        +VideoFrameReader(cfg)
+    }
+    class FrameReaderFactory {
+        <<函数>>
+        +detectSourceType(path) SourceType
+        +createFrameReader(cfg) unique_ptr
+    }
+    class ProjConfig {
+        <<纯数据>>
+    }
+    class PedestrianDetector {
+        -Net net_
+        -ProjConfig cfg_
+        +detect(image) vector~Detection~
+    }
+
+    FrameReader <|-- ImageFrameReader
+    FrameReader <|-- VideoFrameReader
+    FrameReaderFactory ..> FrameReader : 创建
+    ProjConfig <.. FrameReaderFactory : 读取
+    ProjConfig <.. PedestrianDetector : 读取
 ```
 
 ### 核心 API
 
-```cpp
-// 构造：传入 ONNX 模型路径与阈值
-PedestrianDetector pd("models/yolov8n.onnx",
-                      /* conf_threshold = */ 0.5f,
-                      /* iou_threshold  = */ 0.45f);
+**配置**
 
-// 检测：返回所有行人框
+```cpp
+struct ProjConfig {
+    std::string model_path;              // ONNX 模型路径
+    std::string source_path;             // 图片或视频路径
+
+    float conf_threshold = 0.5f;         // 调高：漏检多、误检少；调低：漏检少、误检多
+    float iou_threshold  = 0.45f;        // 调高：保留更多重叠框；调低：合并得更激进
+
+    int input_width  = 640;              // 必须与 ONNX 导出时的 imgsz 一致
+    int input_height = 640;
+
+    int person_class_id = 0;             // COCO 中 person 为 0 号类
+};
+```
+
+**检测器**
+
+```cpp
+// 构造：加载 ONNX（较慢，务必只构造一次），并拷贝一份配置
+PedestrianDetector pd(cfg);
+
+// 检测：返回当前帧中的所有行人框
 std::vector<Detection> dets = pd.detect(image);
 
 struct Detection {
@@ -223,77 +429,119 @@ struct Detection {
 };
 ```
 
+**输入源（工厂 + 抽象接口）**
+
+```cpp
+// 按扩展名判类型；无法识别时返回 SourceType::Unknown
+SourceType type = detectSourceType(cfg.source_path);
+
+// 创建对应 Reader；类型无法识别时抛 std::invalid_argument
+std::unique_ptr<FrameReader> fr = createFrameReader(cfg);
+
+// 统一的使用协议 —— 图片与视频完全相同
+if (!fr->open()) { /* 处理失败 */ }
+cv::Mat frame;
+while (fr->read(frame)) {          // 视频读到结尾 / 图片读完 → false，循环自然结束
+    auto dets = pd.detect(frame);
+    // ...
+}
+fr->release();
+```
+
 ---
 
-## 已知限制与路线图
+## 能力边界
 
-### v0.1 当前限制
+### 当前局限
 
-| 限制 | 说明 |
-|---|---|
-| **仅支持单张图片** | 无视频 / 摄像头输入 |
-| **仅检测行人** | `person_class_id_` 硬编码为 0，其他类别被过滤 |
-| **依赖图形界面** | 结果只能用 `imshow` 显示，无法直接保存到文件 |
-| **640 硬编码于三处** | `PedestrianDetector.hpp:34-35`、`PedestrianDetector.cpp:111`、`export_onnx.py:19`，彼此必须一致且**无机制保证** |
-| **Debug 构建** | 当前 `build/` 为 Debug 配置，推理速度非最优 |
-| **无批处理 / 异步** | `detect()` 为同步单帧接口，未复用 `blob` 缓冲区 |
+> 这一节只说明目前存在的问题和缺陷，功能请见上方[功能特性](#功能特性)。
+> 	后续迭代的方向见 **[docs/roadmap.md](docs/roadmap.md)** —— 具体任务与排期不在这里维护。
 
-### v0.2 计划
+以下为 **v0.2.0** 的现状：
 
-- [ ] 读取单个视频文件
-- [ ] 复用 v0.1 的 YOLO 检测器逐帧检测
-- [ ] 每帧绘制检测框
-- [ ] 显示检测结果窗口
-- [ ] 按 q / ESC 退出
-- [ ] 视频结束自动停止
-- [ ] 空格暂停 / 继续
-- [ ] n 键单帧步进
-- [ ] s 键截图保存
-- [ ] 跳帧检测：每 N 帧检测一次
-- [ ] 显示当前帧号 / 总帧数 / 进度
-- [ ] 显示 FPS
-- [ ] 显示平均推理耗时
-- [ ] 显示检测数量
-- [ ] 绘制类别和置信度
-- [ ] 保存带框输出视频
-- [ ] 保存每帧检测结果 CSV / JSON / TXT
-- [ ] 每 N 帧保存原始帧
-- [ ] 保存难例：无检测 / 低置信度 / 检测数突变
-- [ ] 命令行参数或配置文件：视频路径、模型路径、阈值、输入尺寸、输出路径
-- [ ] 置信度 / NMS 阈值可配置
-- [ ] 键盘实时调阈值
-- [ ] 抽出 VideoSource 或 processVideo()
-- [ ] 异常处理：视频打不开、解码失败、读到结尾
-- [ ] 分阶段耗时：读取、预处理、推理、后处理、绘制
-- [ ] 多线程：读帧 / 推理 / 显示分离
-- [ ] 批量处理多个视频
-- [ ] ROI 区域检测
-- [ ] 简单 IoU 跟踪，给行人加 ID
-- [ ] 暂不纳入 v0.2：FFmpeg、Qt、训练模型、多推理后端、复杂跟踪、复杂多线程流水线
+| 限制                        | 说明                                                         |
+| --------------------------- | ------------------------------------------------------------ |
+| **坏图会让程序崩溃**        | `ImageFrameReader::read` 未检查 `imread` 的空图，空帧一路带到 `PedestrianDetector::preprocess` 抛异常，而帧循环没有 `try/catch` → `std::terminate` |
+| **帧循环无异常防护**        | `PedestrianDetector::detect` 抛出的任何异常都会终止程序，而不是跳过当前帧 |
+| **视频不按原速播放**        | 帧间隔固定 `waitKey(1)`，语义是"尽快解码"；高分辨率视频会明显快放、掉节奏 |
+| **无任何状态显示**          | 没有帧号 / 总帧数 / 进度 / FPS / 推理耗时                    |
+| **Reader 未暴露视频元信息** | `FrameReader` 没有 `fps()` / `frameCount()` / 帧号一类接口，`main` 想知道只能自己去问 `SourceType` |
+| **按键控制极少**            | 只有 ESC 退出；`q` 键未实现，无暂停 / 单帧步进 / 截图        |
+| **依赖图形界面**            | 结果只能用 `cv::imshow` 显示，无法保存为图片或视频           |
+| **输入尺寸三处需手动同步**  | `ProjConfig::input_width/input_height`、letterbox 画布、`export_onnx.py` 的 `imgsz`，无机制保证一致 |
+| **每帧重复分配与计算**      | letterbox 画布、blob、transpose 每帧重建；`scale/pad` 每帧重算（同一视频内恒定） |
+| **无跳帧 / 多线程 / 跟踪**  | 逐帧同步推理，无流水线并行，无行人 ID                        |
+| **Debug 构建**              | `build/` 当前是 Debug 配置，推理速度非最优                   |
+| **仅 CPU 推理**             | `setPreferableBackend/Target` 被注释，走默认 OpenCV 后端 + CPU |
+
+### 暂时不考虑的方向
+
+先聚焦主线：对推理流水线继续完善。以下方向当前主动不纳入，条件变了会重新评估：
+
+- FFmpeg / GStreamer 解码
+- Qt 或其他 GUI 框架
+- 训练 / 微调模型
+- 多推理后端（TensorRT / OpenVINO / ONNX Runtime）
+- 复杂跟踪（SORT / DeepSORT）
+- 复杂多线程流水线
+
+### 下一步
+
+重心仍是**把现有能力做扎实**：先补健壮性与播放节奏（坏帧不再终止程序、帧间隔贴合源本身、画面能看见进度），再补播放控制与输出管道（暂停 / 步进 / 截图、结果落盘），性能与输入源扩展排在后面。
+
+方向与排序见 **[docs/roadmap.md](docs/roadmap.md)**；具体任务与排期不在这里维护。
 
 ---
 
 ## 学习资料
 
-**[`docs/opencv-notes.md`](docs/opencv-notes.md)** —— 与本项目配套的 OpenCV 学习笔记，约 6000 字，覆盖本项目用到的全部知识点：
+`docs/` 下是随项目一起迭代的**模块知识笔记**：不同模块对应不同的文件，各自独立更新。
 
-| 章节 | 内容 |
-|---|---|
-| §1 | `cv::Mat` 内存模型：视图 vs 深拷贝、类型系统、像素访问三种方式 |
-| §2-§4 | 图像 I/O、几何变换与 LetterBox 数学、`blobFromImage` 的 5 件事 |
-| §5-§7 | DNN 模块（Net / NMSBoxes）、后处理 core 操作、绘图 API |
-| §8-§9 | 基础类型速查、**本项目易错点自查清单** |
-| §10-§11 | 学习路线、8 道练习题 + 9 道自测题 |
+| 文档                                                   | 内容                                                         | 适合                           |
+| ------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------ |
+| **[docs/opencv-notes.md](docs/opencv-notes.md)**       | OpenCV 全部知识点：`cv::Mat` 内存模型、图像/视频 I/O（`imread`、`VideoCapture`）、HighGUI 帧循环、几何变换与 LetterBox 数学、`blobFromImage`、DNN 模块、绘图 API；附易错点自查清单、13 道练习、14 道自测题 | 边写边查，建立 OpenCV 主干知识 |
+| **[docs/factory-pattern.md](docs/factory-pattern.md)** | 工厂模式：为什么需要、本项目的 `FrameReaderFactory` 走读、简单工厂 / 工厂方法 / 抽象工厂对比、扩展新输入源的步骤、注册表进阶写法、7 条常见坑 | 想搞懂"这层抽象到底值不值"     |
+| **[docs/cpp-oop-notes.md](docs/cpp-oop-notes.md)**     | C++ 语言与设计：抽象接口、虚函数与多态、虚析构为什么必须有、`unique_ptr` 所有权、RAII 与 `release()` 的关系、值语义 vs 指针语义、设计原则对照 | 补 C++ 面向对象的地基          |
 
-其中 §0 提供了一张「项目代码行号 ↔ OpenCV API ↔ 知识主题」的对照表，是入手的最佳入口。
+> 每个笔记内部都有「§0 总览：项目代码 ↔ 知识点」的对照表，以及 `更新记录` 小节 —— 随代码迭代同步维护。
+>
+> 另有 **[docs/roadmap.md](docs/roadmap.md)** —— 方向性文档（粗粒度、非承诺），只说"往哪走"，不列具体任务与排期。
+
+---
+
+## 更新记录
+
+| 版本                 | 内容                                                         |
+| -------------------- | ------------------------------------------------------------ |
+| **v0.2.1**（进行中） | 打磨版：修复空图崩溃与帧循环异常防护；帧间隔改由 `FrameReader::frameDelayMs()` 决定（按原生 FPS 播放）；新增 `q` 退出与帧号 / FPS 叠加显示；`release()` 下沉析构 |
+| **v0.2.0**           | 统一输入抽象：新增 `FrameReader` 接口 + `ImageFrameReader` / `VideoFrameReader` 实现 + `FrameReaderFactory` 工厂；`main` 改为统一帧循环（图片 / 视频共用）；新增 `ProjConfig` 集中配置；新增视频模块笔记与两份配套知识笔记 |
+| **v0.1**             | 单张图片检测：手写 LetterBox → `blobFromImage` → 前向推理 → 输出解码 → NMS → 绘制显示 的完整流水线 |
+
+---
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request。
+
+---
+
+## License
+
+本项目以 **GNU Affero General Public License v3.0（AGPL-3.0）** 发布，全文见 [LICENSE](./LICENSE)。
 
 ---
 
 ## 致谢
 
 - 模型来自 [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics)（AGPL-3.0）
-- 推理基于 [OpenCV](https://opencv.org/) `dnn` 模块
+- 推理基于 [OpenCV](https://opencv.org/) `dnn` / `videoio` 模块
 
 ---
 
-*v0.1 · 单张图片 · 单类别 person · YOLOv8n ONNX + OpenCV DNN*
+## 联系
+
+邮箱：joireveyuan@gmail.com
+
+---
+
+*v0.2.0 · 图片 + 视频 · 单类别 person · YOLOv8n ONNX + OpenCV DNN*（v0.2.1 打磨中）
