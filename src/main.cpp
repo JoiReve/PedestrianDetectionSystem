@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
         drawDetections(frame, d);
         cv::imshow(kWindowName, frame);
         const int key = cv::waitKey(delay);
-        if (key == 27) {
+        if (key == 27 || key == 'q' || key == 'Q') {
             break;
         }
     }
