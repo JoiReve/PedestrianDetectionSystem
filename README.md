@@ -121,8 +121,6 @@ sudo cmake --install <opencv_build>
 cmake -S . -B build -DOpenCV_DIR=/usr/local/lib/cmake/opencv5
 ```
 
-> 发行版自带的 OpenCV 4.x（`sudo apt install libopencv-dev`）API 兼容、通常也能编译通过，但不是本项目的实测环境 —— 见[环境依赖](#环境依赖)的版本说明。
-
 ### 3. Python 环境（仅重新导出模型时需要）
 
 仓库已包含导出好的 `models/yolov8n.onnx`，日常使用**不需要**这一步：
