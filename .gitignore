@@ -1,22 +1,51 @@
-# CMake 构建目录
+# C++ / CMake
 build/
+build-*/
+cmake-build-*/
+out/
 
-# Python 虚拟环境与缓存
+# CMake 就地构建污染
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# 编译产物
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Python
 venv/
 .venv/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
 
-# 训练权重
-*.pt
-*.pth
-
-# IDE 和系统文件
+# IDE / 系统
 .vscode/
 .idea/
+*.swp
+*~
 .DS_Store
+Thumbs.db
 
-# C++ 编译产物
-*.o
-*.a
-*.so
+# 日志 / 临时
+*.log
+logs/
+*.tmp
+*.bak
+
+# 敏感信息
+.env
+*.env
