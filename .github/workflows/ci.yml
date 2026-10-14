@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支连续推送时，取消上一次未跑完的任务
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 编译
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-latest 自带的是 OpenCV 4.6（本项目实测环境是自编译的 5.1，
+      # 两者 API 兼容，这里用发行版包换取 CI 速度）
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ libopencv-dev
+
+      - name: 配置
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: 编译
+        run: cmake --build build -j"$(nproc)"
+
+      - name: 冒烟测试
+        run: ./build/pedestrian_detection_system --version
+
+  docs:
+    name: 文档一致性
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # CMakeLists.txt 是真源，README 首屏必须与之一致
+      - name: 校验版本号
+        run: python3 scripts/check_version.py
+
+      # 相对路径 + #锚点，防止重构文档时留下断链
+      - name: 校验文档链接
+        run: python3 scripts/check_links.py
