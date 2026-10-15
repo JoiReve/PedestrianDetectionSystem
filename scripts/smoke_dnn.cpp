@@ -1,12 +1,4 @@
-// DNN 冒烟测试：验证 OpenCV 的 ONNX 加载与前向推理这条链路真的能用。
-//
-// 只编译一次、不依赖图形界面，所以可以放进 CI —— 这正是 `--version` 做不到的事：
-// 它连一个 OpenCV API 都没调用。本程序会真正 readNetFromONNX + forward，
-// 并校验输出形状是 YOLOv8n 期望的 [1, 84, 8400]。
-//
-// 用法：
-//   g++ -std=c++17 scripts/smoke_dnn.cpp -o /tmp/smoke_dnn $(pkg-config --cflags --libs opencv5)
-//   /tmp/smoke_dnn models/yolov8n.onnx
+// DNN 冒烟测试：验证 OpenCV 的 ONNX 加载与前向推理这条链路可以使用。
 
 #include <opencv2/opencv.hpp>
 #include <cstdio>
