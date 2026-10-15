@@ -72,21 +72,22 @@
 
 ## 环境依赖
 
-| 依赖     | 版本（本项目验证环境）         | 说明                                                   |
-| -------- | ------------------------------ | ------------------------------------------------------ |
-| C++ 标准 | C++17                          | `CMakeLists.txt` 中指定                                |
-| CMake    | ≥ 3.10                         |                                                        |
-| OpenCV   | 5.1.0（自编译于 `/usr/local`） | 需含 `dnn`、`highgui`、`imgcodecs`、**`videoio`** 模块 |
-| 编译器   | g++ (GCC)                      |                                                        |
+| 依赖     | 版本（本项目验证环境） | 说明                                                         |
+| -------- | ---------------------- | ------------------------------------------------------------ |
+| C++ 标准 | C++17                  | `CMakeLists.txt` 中指定                                      |
+| CMake    | ≥ 3.10                 |                                                              |
+| OpenCV   | 5.1.0                  | 只支持 5.x；需含 `dnn`、`highgui`、`imgcodecs`、**`videoio`** 模块 |
+| 编译器   | g++ (GCC)              |                                                              |
 
 **模型导出脚本另需 Python 环境（项目自带 `venv/`）：**
 
-| 依赖        | 版本    |
-| ----------- | ------- |
-| Python      | 3.12.3  |
-| ultralytics | 8.4.161 |
-| torch       | 2.14.0  |
-| onnx        | 1.23.0  |
+| 依赖          | 版本     |
+| ------------- | -------- |
+| Python        | 3.12.3   |
+| ultralytics   | 8.4.161  |
+| torch         | 2.14.0   |
+| onnx          | 1.23.0   |
+| opencv-python | 5.0.0.93 |
 
 ---
 
@@ -103,10 +104,10 @@ sudo apt install -y build-essential cmake
 
 ### 2. OpenCV
 
-需要含 `dnn`、`imgcodecs`、`videoio`、`highgui` 模块的 OpenCV。本项目在**自编译的 OpenCV 5.1.0**（安装到 `/usr/local`）上验证：
+本地与 CI 均基于 OpenCV 5.1.0 源码构建（见 [.github/workflows/ci.yml](https://www.kimi.com/chat/.github/workflows/ci.yml)）
 
 ```bash
-# 以 OpenCV 5.x 源码为例：只编译用得到的模块，能显著缩短编译时间
+# OpenCV 5.x 源码：只编译用得到的模块，能显著缩短编译时间
 cmake -S <opencv_src> -B <opencv_build> \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -114,6 +115,8 @@ cmake -S <opencv_src> -B <opencv_build> \
 cmake --build <opencv_build> -j"$(nproc)"
 sudo cmake --install <opencv_build>
 ```
+
+`CMakeLists.txt` 用 `find_package(OpenCV 5 REQUIRED)` 卡大版本号
 
 编译本项目时若 CMake 找到的不是这一份，显式指定路径：
 
@@ -141,11 +144,12 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-产物：`build/pedestrian_detection_system`
+产物：
 
-> 当前 `build/` 缓存是 **Debug** 配置（`CMAKE_BUILD_TYPE=Debug`），推理速度非最优。
->
-> 做性能对比前先切 Release：`cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j`。
+- `build/pedestrian_detection_system` —— 主程序
+- `build/smoke_dnn` —— 冒烟测试，仅 CI 调用
+
+> `build/` 目录是本地构建产物（不入库）。若之前用它跑过 Debug 配置，重新执行上述命令即可切回 Release；做性能对比前务必确认 `CMAKE_BUILD_TYPE=Release`。
 
 ### 2. 运行
 
@@ -243,8 +247,7 @@ flowchart TD
 venv/bin/python scripts/export_onnx.py
 ```
 
-> 目录名 `face_detection/` 与检测用途无关，仅作为权重存放位置；
-> 权重为 ultralytics 标准的 COCO 预训练 `yolov8n`（输出 84 = 4 + 80 类，即 COCO 的 80 类，其中 `person` 为 0 号类）。
+> 目录名 `face_detection/` 与检测用途无关，仅作为权重存放位置；权重为 ultralytics 标准的 COCO 预训练 `yolov8n`（输出 84 = 4 + 80 类，即 COCO 的 80 类，其中 `person` 为 0 号类）。
 
 **输入输出规格：**
 
@@ -253,7 +256,7 @@ venv/bin/python scripts/export_onnx.py
 | 输入 | `1 × 3 × 640 × 640` | `CV_32F` | RGB, 归一化到 [0,1] |
 | 输出 | `1 × 84 × 8400`     | `CV_32F` | 未解码的原始预测头  |
 
-> ⚠️ 输入尺寸 `640` 需要与三处保持一致：`ProjConfig::input_width/input_height`（代码侧）、letterbox 画布尺寸（由 config 派生）、`export_onnx.py` 的 `imgsz`（导出侧）。目前**没有机制保证**三者同步，改模型输入尺寸时务必手动核对。
+> ⚠️ 输入尺寸 `640` 需三处同步：`ProjConfig::input_width/input_height`、letterbox 画布、`export_onnx.py` 的 `imgsz`。无机制保证，改时手动核对 —— 冒烟测试会校验输出形状 `[1, 84, 8400]`，不同步则 CI 直接失败。
 
 ---
 
@@ -285,12 +288,13 @@ PedestrianDetectionSystem/
 │       └── yolov8n.pt              # ultralytics PyTorch 权重（导出源）
 ├── scripts/
 │   ├── export_onnx.py              # .pt → .onnx 导出脚本
+│   ├── smoke_dnn.cpp               # DNN 冒烟测试：ONNX 加载 → 前向 → 校验 [1,84,8400]（CI 调用）
 │   ├── check_version.py            # 版本号一致性校验（CI 调用）
 │   └── check_links.py              # 文档链接与锚点校验（CI 调用）
 ├── docs/
 │   ├── roadmap.md                  # 路线图：方向性说明（粗粒度，非承诺）
 │   └── PDExample.png               # 演示截图（README「演示」节引用）
-├── .github/workflows/ci.yml        # CI：编译 + 文档一致性
+├── .github/workflows/ci.yml        # CI：编译 + 冒烟 + 版本号一致性 + 文档链接
 ├── venv/                           # Python 虚拟环境（模型导出用）
 └── build/                          # CMake 构建目录
 ```
@@ -336,7 +340,7 @@ PedestrianDetectionSystem/
 
 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)（`feat:` / `fix:` / `docs:` / `refactor:` …）：[CHANGELOG.md](CHANGELOG.md) 由它自动生成，也是版本号自动推断的依据。
 
-发版流程写在 [cliff.toml](cliff.toml) 顶部注释里；CI（编译 + 版本号一致性 + 文档链接）见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
+发版流程写在 [cliff.toml](cliff.toml) 顶部注释里；CI（编译 + 冒烟 + 版本号一致性 + 文档链接）见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
 
 ---
 
