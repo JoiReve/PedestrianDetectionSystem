@@ -7,7 +7,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# 同一分支连续推送时，取消上一次未跑完的任务
+# 同一 ref 的多次运行排队执行；新推送到来时，取消该 ref 上尚未完成的旧运行
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -16,31 +16,16 @@ permissions:
   contents: read
 
 jobs:
-  build-distro:
-    name: 编译（发行版 OpenCV 4.6 · 非目标版本）
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: 安装依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake g++ libopencv-dev
-
-      - name: 配置
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-
-      - name: 编译
-        run: cmake --build build -j"$(nproc)"
-
-  build-opencv5:
-    name: 编译 + 冒烟（自编译 OpenCV 5.1 · 目标版本）
+  build:
+    name: 编译 + 冒烟（自编译 OpenCV 5.1）
     runs-on: ubuntu-latest
     env:
+      # 固定 OpenCV 源码的 commit；缓存 key 引用此值，源码不变则缓存命中
       OPENCV_COMMIT: 8d126c4a672936fde5a21d9133c352b18d4299a5
     steps:
       - uses: actions/checkout@v4
 
+      # 缓存自编译的 OpenCV 安装目录（~/opencv5），避免每次 CI 重编
       - name: 缓存 OpenCV 安装
         id: cache-opencv
         uses: actions/cache@v4
@@ -48,11 +33,13 @@ jobs:
           path: ~/opencv5
           key: opencv-${{ runner.os }}-${{ env.OPENCV_COMMIT }}
 
+      # CMakeLists.txt 要求 OpenCV 5（find_package(OpenCV 5 REQUIRED)），
+      # runner 仅预装 4.6 不满足要求，故需从源码构建 5.1
       - name: 从源码构建 OpenCV 5.1
         if: steps.cache-opencv.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
-          # GTK3 供 highgui；ffmpeg 供 videoio（本地那份 OpenCV 也是 FFMPEG: YES）
+          # highgui 依赖 GTK3，videoio 依赖 FFmpeg（libav*）
           sudo apt-get install -y --no-install-recommends \
             cmake g++ curl unzip \
             libgtk-3-dev \
@@ -60,6 +47,8 @@ jobs:
           curl -sSL -o /tmp/opencv.zip \
             "https://github.com/opencv/opencv/archive/${OPENCV_COMMIT}.zip"
           unzip -q /tmp/opencv.zip -d /tmp
+          # BUILD_LIST 只编译本项目用到的 6 个模块；其余开关关闭测试、示例、
+          # Java、Python 绑定，以缩短构建时间
           cmake -S "/tmp/opencv-${OPENCV_COMMIT}" -B /tmp/opencv-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$HOME/opencv5" \
@@ -69,6 +58,8 @@ jobs:
           cmake --build /tmp/opencv-build -j"$(nproc)"
           cmake --install /tmp/opencv-build
 
+      # 自编译的 5.1 位于 $HOME/opencv5，不在 CMake 默认搜索路径中；
+      # 不指定 OpenCV_DIR 时 find_package(OpenCV 5) 将直接失败（系统 4.6 会被版本检查拒绝，不会被误用）
       - name: 配置本项目
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
@@ -77,7 +68,7 @@ jobs:
       - name: 编译
         run: cmake --build build -j"$(nproc)"
 
-      # ubuntu runner 上可能预装了系统 OpenCV，这条防止 CMake 悄悄用了它
+      # find_package 只保证编译期选对版本；此步在二进制层面验证动态库确实来自 $HOME/opencv5，防止链接环节出现意外
       - name: 确认链接到自编译的 5.1
         run: |
           if ! ldd build/pedestrian_detection_system | grep -q "$HOME/opencv5"; then
@@ -86,12 +77,11 @@ jobs:
             exit 1
           fi
 
-      - name: 冒烟（ONNX 加载 → 前向推理 → 校验输出形状）
+      # CI 环境无摄像头与 GPU，完整检测跑不了；改为验证 DNN 最小链路：加载 ONNX → 前向推理 → 校验输出张量形状
+      - name: 冒烟测试
         run: |
-          export PKG_CONFIG_PATH="$HOME/opencv5/lib/pkgconfig"
-          g++ -std=c++17 -O2 scripts/smoke_dnn.cpp -o /tmp/smoke_dnn \
-            $(pkg-config --cflags --libs opencv5)
-          /tmp/smoke_dnn models/yolov8n.onnx
+          cmake --build build --target smoke_dnn -j"$(nproc)"
+          ./build/smoke_dnn models/yolov8n.onnx
 
   # ──────────────────────────────────────────────────────────────────────
   docs:
@@ -104,10 +94,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      # CMakeLists.txt 是真源，README 首屏必须与之一致
+      # 以 CMakeLists.txt 中的版本号为准，校验 README 首屏与其一致
       - name: 校验版本号
         run: python3 scripts/check_version.py
 
-      # 相对路径 + #锚点 + 目录覆盖率
+      # 校验 README 及 docs/ 中的相对路径、页面内锚点（#fragment）、目录覆盖率
       - name: 校验文档链接
         run: python3 scripts/check_links.py
