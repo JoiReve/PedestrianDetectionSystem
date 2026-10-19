@@ -1,12 +1,12 @@
 # PedestrianDetectionSystem
 
-> **v0.2.1** —— 基于 **YOLOv8n (ONNX) + OpenCV DNN** 的 C++ 行人检测系统，支持**图片**与**视频**输入。
+> **v0.2.2** —— 基于 **YOLOv8n (ONNX) + OpenCV DNN** 的 C++ 行人检测系统，支持**图片**与**视频**输入，并输出**逐帧分阶段耗时**。
 
 ---
 
 一个从零手写完整推理流水线的学习型项目：不依赖 OpenCV 的高层封装（`DetectionModel`），LetterBox 预处理、YOLOv8 输出解码、NMS 后处理全部自己实现。
 
-当前版本在检测能力之上补了一层**统一输入抽象**（`FrameReader` + 工厂），让同一套推理代码同时服务图片和视频 —— 既适合作为理解「深度学习模型部署」的最小可运行范例，也是一个观察设计模式如何落地的小样本。
+当前版本在检测能力之上补了两层工程化能力：**统一输入抽象**（`FrameReader` + 工厂）让同一套推理代码同时服务图片和视频；**分阶段性能观测**（`StageTimeTracker` + `ScopedTimer`）用 RAII 记录预处理 / 推理 / 后处理各自耗时 —— 既适合作为理解「深度学习模型部署」的最小可运行范例，也是一个观察设计模式与分阶段计时如何落地的小样本。
 
 ---
 
@@ -28,6 +28,7 @@
     - [3. 按键](#3-按键)
   - [工作原理](#工作原理)
     - [推理流水线（每个输入帧都走一遍）](#推理流水线每个输入帧都走一遍)
+  - [性能统计](#性能统计)
   - [模型准备](#模型准备)
   - [代码结构](#代码结构)
   - [能力边界](#能力边界)
@@ -49,6 +50,8 @@
 - **集中式配置**：模型路径、源路径、置信度 / NMS 阈值、输入尺寸、类别号统一收敛到 `ProjConfig`
 - **模型只加载一次**：`PedestrianDetector` 在帧循环外构造，视频逐帧复用同一个 `cv::dnn::Net`
 - **零拷贝解码**：解码阶段用「包裹外部内存的 Mat 头」读取分数，避免逐框拷贝
+- **分阶段耗时统计**：`StageTimeTracker` 单例 + RAII 作用域计时（`STAGE_TIME_TRACKER_SCOPE`），逐帧输出「预处理 / 推理 / 后处理」的耗时与占比
+- **大分辨率自适应显示**：显示宽度超过 1280 px 时窗口内等比缩小，检测与坐标还原仍在原图分辨率上完成
 
 ---
 
@@ -63,31 +66,33 @@
 | 层次             | 技术                                       | 在本项目中的用途                                             |
 | ---------------- | ------------------------------------------ | ------------------------------------------------------------ |
 | 语言 / 标准      | C++17                                      | 全部运行时代码                                               |
-| 构建             | CMake ≥ 3.10                               | 编译与链接，无额外的第三方构建依赖                           |
-| 视觉库           | OpenCV 5.1.0                               | `core` / `imgproc`（LetterBox、绘图）、`imgcodecs`（`imread`）、`videoio`（`VideoCapture`）、`highgui`（`imshow` / `waitKey`） |
+| 构建             | CMake 4.4.4（要求 ≥ 3.10）                 | 编译与链接，无额外的第三方构建依赖                           |
+| 视觉库           | OpenCV 5.0.0（本机验证）                   | `core` / `imgproc`（LetterBox、绘图）、`imgcodecs`（`imread`）、`videoio`（`VideoCapture`）、`highgui`（`imshow` / `waitKey`） |
 | 推理             | OpenCV DNN                                 | `readNetFromONNX` + `forward`，默认 OpenCV 后端 + CPU        |
 | 模型             | YOLOv8n（ONNX）                            | ultralytics COCO 预训练权重导出，输入 640×640，输出 `[1, 84, 8400]` |
 | 后处理           | 手写实现                                   | 输出解码、LetterBox 坐标逆变换、`cv::dnn::NMSBoxes` 去重     |
-| 模型导出（可选） | Python 3.12 + ultralytics + PyTorch + onnx | 仅在重新导出 ONNX 时用到，不参与运行时                       |
+| 性能观测         | C++17 `<chrono>` + RAII                    | `ScopedTimer` 作用域计时，`StageTimeTracker` 单例汇总并按帧输出 |
+| 模型导出（可选） | Python 3.14 + ultralytics + PyTorch + onnx | 仅在重新导出 ONNX 时用到，不参与运行时                       |
 
 ## 环境依赖
 
 | 依赖     | 版本（本项目验证环境） | 说明                                                         |
 | -------- | ---------------------- | ------------------------------------------------------------ |
+| 系统     | Ubuntu 26.04.1 LTS     | 本项目验证环境                                               |
 | C++ 标准 | C++17                  | `CMakeLists.txt` 中指定                                      |
-| CMake    | ≥ 3.10                 |                                                              |
-| OpenCV   | 5.1.0                  | 只支持 5.x；需含 `dnn`、`highgui`、`imgcodecs`、**`videoio`** 模块 |
-| 编译器   | g++ (GCC)              |                                                              |
+| CMake    | 4.4.4（要求 ≥ 3.10）   |                                                              |
+| OpenCV   | 5.0.0                  | 只支持 5.x；需含 `dnn`、`highgui`、`imgcodecs`、**`videoio`** 模块 |
+| 编译器   | g++ 15.2.0             |                                                              |
 
-**模型导出脚本另需 Python 环境（项目自带 `venv/`）：**
+**模型导出脚本另需 Python 环境（本地 `venv/`，已被 `.gitignore` 忽略）：**
 
-| 依赖          | 版本     |
-| ------------- | -------- |
-| Python        | 3.12.3   |
-| ultralytics   | 8.4.161  |
-| torch         | 2.14.0   |
-| onnx          | 1.23.0   |
-| opencv-python | 5.0.0.93 |
+| 依赖          | 版本                          |
+| ------------- | ----------------------------- |
+| Python        | 3.14.4                        |
+| ultralytics   | 8.4.178                       |
+| torch         | 2.14.1                        |
+| onnx          | 导出时由 ultralytics 自动安装 |
+| opencv-python | 5.0.0.93                      |
 
 ---
 
@@ -104,7 +109,7 @@ sudo apt install -y build-essential cmake
 
 ### 2. OpenCV
 
-本地与 CI 均基于 OpenCV 5.1.0 源码构建（见 [.github/workflows/ci.yml](https://www.kimi.com/chat/.github/workflows/ci.yml)）
+本地验证环境为 OpenCV 5.0.0；CI 固定从源码构建 OpenCV 5.1（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）
 
 ```bash
 # OpenCV 5.x 源码：只编译用得到的模块，能显著缩短编译时间
@@ -130,7 +135,9 @@ cmake -S . -B build -DOpenCV_DIR=/usr/local/lib/cmake/opencv5
 
 ```bash
 python3 -m venv venv
-venv/bin/pip install ultralytics==8.4.161 onnx==1.23.0   # PyTorch 作为 ultralytics 的依赖一并安装
+venv/bin/pip install ultralytics==8.4.178
+# PyTorch 作为 ultralytics 的依赖一并安装；
+# 首次执行 export_onnx.py 时，ultralytics 会自动安装导出所需的 onnx
 ```
 
 环境就绪后，继续 [快速开始](#快速开始) 编译并运行。
@@ -169,6 +176,8 @@ cmake --build build -j
 
 - **图片模式**：弹窗显示标注结果，按 ESC 或任意键后程序结束。
 - **视频模式**：逐帧检测并实时显示（红框 + `person: 0.87` 形式的置信度标签），按 **ESC** 提前退出，视频播完自动结束。
+- **终端报表**：每帧结束后打印三阶段耗时表（见[性能统计](#性能统计)），与显示窗口相互独立。
+- **显示缩放**：源画面宽度超过 1280 px 时，窗口内等比缩小；检测框坐标仍基于原图，不受影响。
 
 > **注意**：程序通过 `cv::imshow` 显示结果，需要图形界面环境（X11 / Wayland）。
 >
@@ -233,6 +242,27 @@ flowchart TD
     P3 -. "坐标逆变换依据" .-> O3
 ```
 
+> 三个阶段在 `PedestrianDetector::detect()` 中分别被 `STAGE_TIME_TRACKER_SCOPE(...)` 包裹；计时只覆盖推理链路本身，绘制、`imshow` 与 `waitKey` 不计入。
+
+---
+
+## 性能统计
+
+每个输入帧走完 `detect()` 后，终端会打印一张分阶段耗时表：
+
+```text
+vX.Y.Z Performance Metrics Report
+Stage          Total(ms)   Avg(ms)     Ratio
+预处理         12.34       12.34       8.21%
+推理           131.56      131.56      87.52%
+后处理         6.42        6.42        4.27%
+Total Time Spent: 150.32
+```
+
+- **实现方式**：`ScopedTimer` 构造时记录 `steady_clock` 起点，析构时把耗时交给 `StageTimeTracker` 单例；`STAGE_TIME_TRACKER_SCOPE("名称")` 宏在作用域内创建计时器，异常路径也能正确结算。
+- **统计窗口**：报表在每帧 `detect()` 结束后打印并清空，因此 `Total` 与 `Avg` 在同一帧内相等，`Ratio` 表示三个阶段之间的占比 —— 它回答的是「这一帧的时间花在哪」，不是整段视频的累计值或 FPS。
+- **读数的前提**：只在 `CMAKE_BUILD_TYPE=Release` 下有参考价值，Debug 构建的数字会被未优化代码显著放大。做优化前后对比时先固定构建类型，再看「推理」一栏。
+
 ---
 
 ## 模型准备
@@ -272,13 +302,15 @@ PedestrianDetectionSystem/
 ├── include/
 │   ├── ProjConfig.hpp              # 集中配置：路径 / 阈值 / 输入尺寸 / 类别号
 │   ├── PedestrianDetector.hpp      # 检测器：LetterBoxInfo / Detection / PedestrianDetector
+│   ├── StageTimeTracker.hpp        # 【性能观测】ScopedTimer + 单例汇总 + 计时宏
 │   ├── FrameReader.hpp             # 【抽象接口】open / read / release / isOpened
 │   ├── ImageFrameReader.hpp        # 图片源：一次性读取（isUsed_ 标志）
 │   ├── VideoFrameReader.hpp        # 视频源：封装 cv::VideoCapture，逐帧读取
 │   └── FrameReaderFactory.hpp      # 工厂：detectSourceType + createFrameReader
 ├── src/
-│   ├── main.cpp                    # 装配与帧循环：创建 → 打开 → 循环检测绘制显示
-│   ├── PedestrianDetector.cpp      # 核心实现：preprocess / postprocess / detect
+│   ├── main.cpp                    # 装配与帧循环：检测 → 绘制 → 输出耗时 → 显示
+│   ├── PedestrianDetector.cpp      # 核心实现：preprocess / postprocess / detect（含三阶段计时）
+│   ├── StageTimeTracker.cpp        # 分阶段计时汇总、按帧输出报表
 │   ├── ImageFrameReader.cpp
 │   ├── VideoFrameReader.cpp
 │   └── FrameReaderFactory.cpp      # 扩展名表 + switch 创建
@@ -295,8 +327,8 @@ PedestrianDetectionSystem/
 │   ├── roadmap.md                  # 路线图：方向性说明（粗粒度，非承诺）
 │   └── PDExample.png               # 演示截图（README「演示」节引用）
 ├── .github/workflows/ci.yml        # CI：编译 + 冒烟 + 版本号一致性 + 文档链接
-├── venv/                           # Python 虚拟环境（模型导出用）
-└── build/                          # CMake 构建目录
+├── venv/                           # Python 虚拟环境（本地，不入库）
+└── build/                          # CMake 构建目录（本地，不入库）
 ```
 
 ---
@@ -309,7 +341,7 @@ PedestrianDetectionSystem/
 
 - 坏帧会让程序终止（无异常防护）
 - 视频不按原速播放
-- 无帧号 / 进度 / FPS / 推理耗时
+- 无帧号 / 播放进度 / 实时 FPS（仅终端输出三阶段耗时，未做端到端帧率统计）
 - 结果只能经 `cv::imshow` 显示，无头环境不可用
 - 按键控制少：无暂停 / 单帧步进 / 截图
 
