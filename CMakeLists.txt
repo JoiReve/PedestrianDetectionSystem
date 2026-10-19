@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(PedestrianDetectionSystem VERSION 0.2.1 LANGUAGES CXX)
+project(PedestrianDetectionSystem VERSION 0.2.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -17,6 +17,7 @@ add_executable(pedestrian_detection_system
         src/ImageFrameReader.cpp
         src/VideoFrameReader.cpp
         src/FrameReaderFactory.cpp
+        src/StageTimeTracker.cpp
 )
 
 # 给指定 target 添加头文件搜索路径
