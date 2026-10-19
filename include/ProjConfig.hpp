@@ -1,7 +1,5 @@
 // config.hpp
-
 // 配置部分
-
 #ifndef PROJ_CONFIG_HPP
 #define PROJ_CONFIG_HPP
 
