@@ -1,6 +1,8 @@
+// main.cpp
 #include "PedestrianDetector.hpp"
 #include "ProjConfig.hpp"
 #include "FrameReaderFactory.hpp"
+#include "StageTimeTracker.hpp"
 
 #include <iostream>
 #include <cstdio>
@@ -25,8 +27,8 @@ namespace {
 
 
 int main(int argc, char **argv) {
-        if (argc == 2 && std::string(argv[1]) == "--version") {
-            std::cout << "PedestrianDetectionSystem " << PROJECT_VERSION << "\n";
+    if (argc == 2 && std::string(argv[1]) == "--version") {
+        std::cout << "PedestrianDetectionSystem " << PROJECT_VERSION << "\n";
         return 0;
     }
 
@@ -72,7 +74,19 @@ int main(int argc, char **argv) {
     while (fr->read(frame)) {
         const auto d = pd->detect(frame);
         drawDetections(frame, d);
-        cv::imshow(kWindowName, frame);
+
+        StageTimeTracker::getInstance().printReport();
+
+        cv::Mat display_frame;
+        double max_width = 1280.0;
+        if (frame.cols > max_width) {
+            double scale = max_width / frame.cols;
+            cv::resize(frame, display_frame, cv::Size(), scale, scale);
+        } else {
+            display_frame = frame;
+        }
+        cv::imshow(kWindowName, display_frame);
+
         const int key = cv::waitKey(delay);
         if (key == 27 || key == 'q' || key == 'Q') {
             break;

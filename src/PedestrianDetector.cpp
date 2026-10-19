@@ -2,6 +2,7 @@
 #include "PedestrianDetector.hpp"
 #include <cmath>
 #include <stdexcept>
+#include "StageTimeTracker.hpp"
 
 PedestrianDetector::PedestrianDetector(const ProjConfig &cfg)
     : cfg_(cfg) {
@@ -99,27 +100,39 @@ std::vector<Detection> PedestrianDetector::postprocess(const cv::Mat &output, co
 
 // 接口
 std::vector<Detection> PedestrianDetector::detect(const cv::Mat &image) {
-    // 预处理
     LetterBoxInfo lb_info;
-    cv::Mat input_blob = preprocess(image, lb_info);
-
-    // net_
     cv::Mat blob;
-    cv::dnn::blobFromImage(
-        input_blob,
-        blob,
-        1.0 / 255,
-        cv::Size(),
-        cv::Scalar(0, 0, 0),
-        true,
-        false
-    );
+    cv::Mat output;
+    std::vector<Detection> result;
 
-    // 前向推理
-    net_.setInput(blob);
-    cv::Mat output = net_.forward();
+    {
+        STAGE_TIME_TRACKER_SCOPE("预处理");
+        // 预处理
+        cv::Mat input_blob = preprocess(image, lb_info);
 
-    // 后处理
-    std::vector<Detection> result = postprocess(output, lb_info, image.size());
-    return result;
+        // net_
+        cv::dnn::blobFromImage(
+            input_blob,
+            blob,
+            1.0 / 255,
+            cv::Size(),
+            cv::Scalar(0, 0, 0),
+            true,
+            false
+        );
+    }
+
+    {
+        STAGE_TIME_TRACKER_SCOPE("推理");
+        // 前向推理
+        net_.setInput(blob);
+        output = net_.forward();
+    }
+
+    {
+        STAGE_TIME_TRACKER_SCOPE("后处理");
+        // 后处理
+        result = postprocess(output, lb_info, image.size());
+        return result;
+    }
 }
