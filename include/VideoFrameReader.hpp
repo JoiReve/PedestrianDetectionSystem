@@ -1,5 +1,4 @@
 // VideoFrameReader.hpp
-
 #ifndef VIDEO_FRAME_READER_HPP
 #define VIDEO_FRAME_READER_HPP
 
