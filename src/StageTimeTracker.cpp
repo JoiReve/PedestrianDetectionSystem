@@ -1,4 +1,5 @@
 #include "StageTimeTracker.hpp"
+#include <cstdio>
 #include <iostream>
 
 // StageTimeTracker Class
