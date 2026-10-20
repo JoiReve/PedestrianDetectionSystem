@@ -31,6 +31,11 @@ target_link_libraries(pedestrian_detection_system PRIVATE
         ${OpenCV_LIBS}
 )
 
+# 兜底（仅在确认 OpenCV 未正确传递 FFmpeg 依赖时取消注释）：
+# 共享版 OpenCV 的 libopencv_videoio.so 已声明 FFmpeg 依赖，正常构建不需要；
+# 直接链接会降低可移植性，且系统缺少 FFmpeg 开发库时仍会失败。
+# target_link_libraries(pedestrian_detection_system PRIVATE ${OpenCV_LIBS} avcodec avformat avutil swscale)
+
 target_compile_definitions(pedestrian_detection_system PRIVATE
         PROJECT_VERSION="${PROJECT_VERSION}"
 )
