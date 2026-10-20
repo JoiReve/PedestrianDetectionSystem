@@ -21,38 +21,40 @@ permissions:
 jobs:
   build:
     name: 编译 + 冒烟（自编译 OpenCV 5.0.0）
-    # 固定 runner 镜像，与本地验证环境保持一致；ubuntu-latest 自 2026-10-19
-    # 起逐步迁移到 Ubuntu 26.04，显式指定可避免镜像切换时复用不兼容的缓存。
-    runs-on: ubuntu-26.04
+    # 固定 runner 镜像，避免 ubuntu-latest 迁移带来的系统库/缓存不兼容
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      # OpenCV 5.0.0（tag 5.0.0，commit 40738fb）；改动此值会使缓存 key 变化并触发重建
+      # OpenCV 5.0.0（tag 5.0.0，commit 40738fb）；改动此值会触发缓存重建
       OPENCV_COMMIT: 40738fb16ceddb5fb3fea747585f7ce6abb0605b
-      # 写入缓存 key：切换 runner 镜像时必须同步修改，强制重建 OpenCV
-      UBUNTU_VERSION: "26.04"
+      # 缓存 key 的一部分；切换 runner 镜像时必须同步修改
+      UBUNTU_VERSION: "24.04"
     steps:
       - uses: actions/checkout@v7
 
       # 缓存自编译的 OpenCV 安装目录（~/opencv5），避免每次 CI 重编。
-      # key 含 Ubuntu 版本与源码 commit，两者任一变化都会触发重建。
+      # key 含 Ubuntu 版本、源码 commit 与配置版本号，任一变化都会触发重建。
       - name: 缓存 OpenCV 安装
         id: cache-opencv
         uses: actions/cache@v6
         with:
           path: ~/opencv5
-          key: opencv-${{ runner.os }}-${{ env.UBUNTU_VERSION }}-${{ env.OPENCV_COMMIT }}
+          key: opencv-${{ runner.os }}-${{ env.UBUNTU_VERSION }}-${{ env.OPENCV_COMMIT }}-v2
 
-      # CMakeLists.txt 要求 OpenCV 5（find_package(OpenCV 5 REQUIRED)），
-      # runner 预装的 OpenCV 4.x 不满足要求，因此按固定 commit 自编译 5.0.0。
-      - name: 安装 OpenCV 构建依赖
-        if: steps.cache-opencv.outputs.cache-hit != 'true'
+      # 关键：缓存只保存 ~/opencv5，不包含系统库。无论是否命中缓存，
+      # 都必须安装 FFmpeg/GTK 依赖，否则链接缓存中的 libopencv_videoio 时
+      # 会因为找不到 libavcodec/libavutil 等实现而失败。
+      - name: 安装 OpenCV 构建与运行依赖
         run: |
           sudo apt-get update
-          # highgui 依赖 GTK3，videoio 依赖 FFmpeg（libav*）
+          # highgui 依赖 GTK3，videoio 依赖 FFmpeg（libav*）；
+          # pkg-config 供 OpenCV 的 detect_ffmpeg.cmake 检测 FFmpeg
           sudo apt-get install -y --no-install-recommends \
-            cmake g++ curl unzip \
+            cmake g++ curl unzip pkg-config \
             libgtk-3-dev \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+          # 刷新动态库缓存（apt 通常会自动触发，这里显式执行以防万一）
+          sudo ldconfig
 
       - name: 编译并安装 OpenCV 5.0.0
         if: steps.cache-opencv.outputs.cache-hit != 'true'
@@ -62,12 +64,21 @@ jobs:
           unzip -q /tmp/opencv.zip -d /tmp
           # BUILD_LIST 只编译本项目用到的 6 个模块；测试、示例、Java/Python
           # 绑定全部关闭，显著缩短构建时间。
+          #
+          # FFmpeg 说明：OpenCV 5.0.0 的 videoio/detect_ffmpeg.cmake 通过
+          # pkg-config 查找 libavcodec/libavformat/libavutil/libswscale，
+          # 不读取 FFMPEG_ROOT，因此不添加该无效参数。
+          # 下面的 rpath-link/-L 是防御性配置，正常安装依赖时并非必需。
           cmake -S "/tmp/opencv-${OPENCV_COMMIT}" -B /tmp/opencv-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$HOME/opencv5" \
             -DBUILD_LIST=core,imgproc,imgcodecs,highgui,videoio,dnn \
             -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF \
-            -DBUILD_opencv_apps=OFF -DBUILD_JAVA=OFF -DBUILD_opencv_python3=OFF
+            -DBUILD_opencv_apps=OFF -DBUILD_JAVA=OFF -DBUILD_opencv_python3=OFF \
+            -DWITH_FFMPEG=ON \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu" \
+            -DCMAKE_MODULE_LINKER_FLAGS="-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu" \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu"
           cmake --build /tmp/opencv-build -j"$(nproc)"
           cmake --install /tmp/opencv-build
 
@@ -99,7 +110,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   docs:
     name: 文档一致性
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
