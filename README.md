@@ -67,7 +67,7 @@
 | ---------------- | ------------------------------------------ | ------------------------------------------------------------ |
 | 语言 / 标准      | C++17                                      | 全部运行时代码                                               |
 | 构建             | CMake 4.4.4（要求 ≥ 3.10）                 | 编译与链接，无额外的第三方构建依赖                           |
-| 视觉库           | OpenCV 5.0.0（本机验证）                   | `core` / `imgproc`（LetterBox、绘图）、`imgcodecs`（`imread`）、`videoio`（`VideoCapture`）、`highgui`（`imshow` / `waitKey`） |
+| 视觉库           | OpenCV 5.0.0（本地与 CI）                  | `core` / `imgproc`（LetterBox、绘图）、`imgcodecs`（`imread`）、`videoio`（`VideoCapture`）、`highgui`（`imshow` / `waitKey`） |
 | 推理             | OpenCV DNN                                 | `readNetFromONNX` + `forward`，默认 OpenCV 后端 + CPU        |
 | 模型             | YOLOv8n（ONNX）                            | ultralytics COCO 预训练权重导出，输入 640×640，输出 `[1, 84, 8400]` |
 | 后处理           | 手写实现                                   | 输出解码、LetterBox 坐标逆变换、`cv::dnn::NMSBoxes` 去重     |
@@ -109,7 +109,7 @@ sudo apt install -y build-essential cmake
 
 ### 2. OpenCV
 
-本地验证环境为 OpenCV 5.0.0；CI 固定从源码构建 OpenCV 5.1（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）
+本地与 CI 均使用 OpenCV 5.0.0；CI 从固定 commit 源码构建（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）
 
 ```bash
 # OpenCV 5.x 源码：只编译用得到的模块，能显著缩短编译时间
