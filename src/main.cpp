@@ -6,23 +6,29 @@
 
 #include <iostream>
 #include <cstdio>
+#include <fstream>
+#include <iomanip>
 
 #ifndef PROJECT_VERSION
 #define PROJECT_VERSION "unknown"
 #endif
 
+// 画检测框
 namespace {
-    constexpr auto kWindowName = "Pedestrian Detector";
 
-    void drawDetections(cv::Mat &frame, const std::vector<Detection> &dts) {
-        for (const auto &dt: dts) {
-            cv::rectangle(frame, dt.box, cv::Scalar(0, 0, 255), 2);
-            char buf[64];
-            snprintf(buf, sizeof(buf), "person: %.2f", dt.confidence);
-            cv::putText(frame, buf, cv::Point(dt.box.x, dt.box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                        cv::Scalar(0, 0, 255), 2);
-        }
+constexpr auto kWindowName = "Pedestrian Detector";
+
+void drawDetections(cv::Mat &frame, const std::vector<Detection> &dts) {
+    STAGE_TIME_TRACKER_SCOPE("Draw");
+    for (const auto &dt: dts) {
+        cv::rectangle(frame, dt.box, cv::Scalar(0, 0, 255), 2);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "person: %.2f", dt.confidence);
+        cv::putText(frame, buf, cv::Point(dt.box.x, dt.box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                    cv::Scalar(0, 0, 255), 2);
     }
+}
+
 } // namespace
 
 
@@ -40,6 +46,17 @@ int main(int argc, char **argv) {
     ProjConfig cfg;
     cfg.model_path = argv[1];
     cfg.source_path = argv[2];
+
+    bool no_show = false;
+    std::string dump_csv = "";
+    for(int i = 3;i < argc; ++i) {
+        std::string arg = argv[i];
+        if(arg == "--no-show") {
+            no_show = true;
+        } else if(arg == "--dump" && i + 1 < argc) {
+            dump_csv = argv[++i];
+        }
+    }
 
     const SourceType type = detectSourceType(cfg.source_path);
     if (type == SourceType::Unknown) {
@@ -69,30 +86,84 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    cv::Mat frame;
-    const int delay = (type == SourceType::Image) ? 0 : 1;
-    while (fr->read(frame)) {
-        const auto d = pd->detect(frame);
-        drawDetections(frame, d);
-
-        StageTimeTracker::getInstance().printReport();
-
-        cv::Mat display_frame;
-        double max_width = 1280.0;
-        if (frame.cols > max_width) {
-            double scale = max_width / frame.cols;
-            cv::resize(frame, display_frame, cv::Size(), scale, scale);
-        } else {
-            display_frame = frame;
-        }
-        cv::imshow(kWindowName, display_frame);
-
-        const int key = cv::waitKey(delay);
-        if (key == 27 || key == 'q' || key == 'Q') {
-            break;
+    std::ofstream csv_file;
+    if(!dump_csv.empty()) {
+        csv_file.open(dump_csv);
+        if(csv_file.is_open()) {
+            csv_file << "frame_id,x,y,w,h,score\n";
         }
     }
 
+    cv::Mat frame;
+    const int delay = (type == SourceType::Image) ? 0 : 1;
+    int frame_idx = 0;
+    while (true) {
+        {
+            STAGE_TIME_TRACKER_SCOPE("EndToEnd");
+            bool read_success = false;
+            {
+                STAGE_TIME_TRACKER_SCOPE("Read");
+                read_success = fr->read(frame);
+            }
+            if(!read_success || frame.empty()) {
+                break;
+            }
+            std::vector<Detection> d;
+            {
+                STAGE_TIME_TRACKER_SCOPE("InferChain");
+                d = pd->detect(frame);
+            }
+
+            if(csv_file.is_open()) {
+                if(d.empty()) {
+                    csv_file << frame_idx << ",0,0,0,0,0.000\n";
+                } else {
+                    for(const auto& tmp : d) {
+                        csv_file << frame_idx << ","
+                                 << (int)std::round(tmp.box.x) << ","
+                                 << (int)std::round(tmp.box.y) << ","
+                                 << (int)std::round(tmp.box.width) << ","
+                                 << (int)std::round(tmp.box.height) << ","
+                                 << std::fixed << std::setprecision(3) << tmp.confidence << "\n";
+                    }
+                }
+            }
+
+            drawDetections(frame, d);
+            cv::Mat display_frame;
+            double max_width = 1280.0;
+            if (frame.cols > max_width) {
+                double scale = max_width / frame.cols;
+                cv::resize(frame, display_frame, cv::Size(), scale, scale);
+            } else {
+                display_frame = frame;
+            }
+            int key = -1;
+            if(!no_show) {
+                {
+                    STAGE_TIME_TRACKER_SCOPE("DisplayNWait");
+                    cv::imshow(kWindowName, display_frame);
+                    key = cv::waitKey(delay);
+                }
+            } else {
+                cv::waitKey(1);
+            }
+            if (key == 27 || key == 'q' || key == 'Q') {
+                break;
+            }
+        }
+        if (frame_idx == 0) {
+            std::cout << "\n>>> [Cold Start] Frame 1 (包含初始化与窗口创建开销) <<<\n";
+        } else {
+            std::cout << "\n>>> [Steady State] Frame " << frame_idx + 1 << " <<<\n";
+        }
+        StageTimeTracker::getInstance().printReport();
+        frame_idx++;
+    }
+    if (csv_file.is_open()) {
+        csv_file.close();
+        std::cout << "\n[Golden Snapshot Saved] -> " << dump_csv << "\n";
+    }
     fr->release();
     cv::destroyAllWindows();
     return 0;
