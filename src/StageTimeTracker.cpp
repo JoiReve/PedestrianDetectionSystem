@@ -10,8 +10,15 @@ StageTimeTracker& StageTimeTracker::getInstance() {
 
 void StageTimeTracker::addTime(const std::string& name, double ms) {
     std::lock_guard<std::mutex> lg(mutex_);
-    stats_[name] += ms;
     cnts_[name]++;
+    for(auto& pair : stats_) {
+        if(pair.first == name) {
+            pair.second += ms;
+            return;
+        }
+    }
+    stats_.emplace_back(name, ms);
+
 }
 
 void StageTimeTracker::printReport() {
@@ -21,20 +28,45 @@ void StageTimeTracker::printReport() {
     }
     double totalTime = 0.0;
     for(const auto& s : stats_) {
-        totalTime += s.second;
+        if (s.first == "EndToEnd"){
+            totalTime += s.second;  
+            break;
+        }
     }
 
-    std::cout << "\nv0.2.2 Performance Metrics Report\n";
-    printf("%-15s%-12s%-12s%s\n", "Stage", "Total(ms)", "Avg(ms)", "Ratio");
+    std::cout << "\nPerformance Metrics Report\n";
+    printf("%-20s%-12s%-12s%s\n", "Stage", "Total(ms)", "Avg(ms)", "Ratio(%)");
 
-    for(const auto& s : stats_) {
-        const std::string& name = s.first;
-        double total_ms = s.second;
-        double avg_ms = total_ms / cnts_.at(name);
-        double percent = (totalTime > 0) ? (total_ms / totalTime * 100.0) : 0.0;
-        printf("%-15s%-12.2f%-12.2f%.2f%%\n", name.c_str(), total_ms, avg_ms, percent);
+    std::vector<std::string> order = {
+        "EndToEnd", 
+        "Read", 
+        "InferChain", 
+        "Preprocess", 
+        "Reason", 
+        "Postprocess",
+        "Draw", 
+        "DisplayNWait"
+    };
+    
+    for (const auto& o : order) {
+        for(const auto& s : stats_) {
+            if (s.first == o) {
+                double total_ms = s.second;
+                double avg_ms = total_ms / cnts_.at(o);
+                double percent = (totalTime > 0) ? (total_ms / totalTime * 100.0) : 0.0;
+                std::string display_name = o;
+                if(o == "Read" || o == "InferChain" || o == "Draw" || o == "DisplayNWait") {
+                    display_name = "  " + o;
+                } else if(o == "Preprocess" || o == "Reason" || o == "Postprocess") {
+                    display_name = "    " + o;
+                }
+                printf("%-20s%-12.2f%-12.2f%.2f%%\n", display_name.c_str(), total_ms, avg_ms, percent);
+                break;
+            }
+        }
     }
-    std::cout << "Total Time Spent: " << totalTime << '\n';
+    
+    std::cout << "Total Frame Latency(ms): " << totalTime << '\n';
     stats_.clear();
     cnts_.clear();
 }

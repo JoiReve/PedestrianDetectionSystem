@@ -7,13 +7,15 @@
 #include <mutex>
 #include <string>
 #include <chrono>
+#include <vector>
+#include <utility>
 
 // StageTimeTracke Class
 class StageTimeTracker{
 private:
     StageTimeTracker() = default;
 
-    std::map<std::string, double> stats_;   // 累计时间
+    std::vector< std::pair<std::string, double> > stats_;   // 累计时间
 
     std::map<std::string, double> cnts_;    // 累计次数
 
@@ -29,6 +31,11 @@ public:
 
 // ScopedTimer Class
 class ScopedTimer {
+private:
+    std::string name_;
+
+    std::chrono::time_point<std::chrono::steady_clock> start_;
+    
 public:
     explicit ScopedTimer(const std::string& name);
 
@@ -42,11 +49,6 @@ public:
     ScopedTimer(ScopedTimer&&) = delete;
 
     ScopedTimer& operator=(ScopedTimer&&) = delete;
-
-private:
-    std::string name_;
-
-    std::chrono::time_point<std::chrono::steady_clock> start_;
 };
 
 // 创建一个用于计时的对象
