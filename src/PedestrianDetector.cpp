@@ -106,7 +106,7 @@ std::vector<Detection> PedestrianDetector::detect(const cv::Mat &image) {
     std::vector<Detection> result;
 
     {
-        STAGE_TIME_TRACKER_SCOPE("预处理");
+        STAGE_TIME_TRACKER_SCOPE("Preprocess");
         // 预处理
         cv::Mat input_blob = preprocess(image, lb_info);
 
@@ -123,14 +123,14 @@ std::vector<Detection> PedestrianDetector::detect(const cv::Mat &image) {
     }
 
     {
-        STAGE_TIME_TRACKER_SCOPE("推理");
+        STAGE_TIME_TRACKER_SCOPE("Reason");
         // 前向推理
         net_.setInput(blob);
         output = net_.forward();
     }
 
     {
-        STAGE_TIME_TRACKER_SCOPE("后处理");
+        STAGE_TIME_TRACKER_SCOPE("Postprocess");
         // 后处理
         result = postprocess(output, lb_info, image.size());
         return result;

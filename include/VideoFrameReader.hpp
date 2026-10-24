@@ -6,6 +6,13 @@
 #include <string>
 
 class VideoFrameReader : public FrameReader {
+private:
+    cv::VideoCapture cap_;
+
+    std::string video_path_;
+
+    bool isOpened_ = false;
+
 public:
     VideoFrameReader(const ProjConfig &cfg);
 
@@ -16,13 +23,6 @@ public:
     void release() override;
 
     bool isOpened() const override;
-
-private:
-    cv::VideoCapture cap_;
-
-    std::string video_path_;
-
-    bool isOpened_ = false;
 };
 
 #endif // VIDEO_FRAME_READER_HPP

@@ -6,6 +6,13 @@
 #include <string>
 
 class ImageFrameReader final : public FrameReader {
+private:
+    std::string image_path_;
+
+    bool isOpened_ = false;
+
+    bool isUsed_ = false;
+    
 public:
     ImageFrameReader(const ProjConfig &cfg);
 
@@ -16,13 +23,6 @@ public:
     void release() override;
 
     bool isOpened() const override;
-
-private:
-    std::string image_path_;
-
-    bool isOpened_ = false;
-
-    bool isUsed_ = false;
 };
 
 #endif // IMAGE_FRAME_READER_HPP

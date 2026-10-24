@@ -23,16 +23,17 @@ struct Detection {
 };
 
 class PedestrianDetector {
+private:
+    cv::dnn::Net net_;
+
+    const ProjConfig cfg_;
+
 public:
     PedestrianDetector(const ProjConfig &cfg);
 
     std::vector<Detection> detect(const cv::Mat &image);
 
 private:
-    cv::dnn::Net net_;
-
-    const ProjConfig cfg_;
-
     // 预处理
     cv::Mat preprocess(const cv::Mat &image, LetterBoxInfo &lb_info) const;
 
