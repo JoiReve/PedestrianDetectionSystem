@@ -1,12 +1,12 @@
 # PedestrianDetectionSystem
 
-> **v0.2.2** —— 基于 **YOLOv8n (ONNX) + OpenCV DNN** 的 C++ 行人检测系统，支持**图片**与**视频**输入，并输出**逐帧分阶段耗时**。
+> **v0.2.2** —— 基于 **YOLOv8n (ONNX) + OpenCV DNN** 的 C++ 行人检测系统，支持**图片**与**视频**输入、**无头运行**与**逐帧检测结果落盘**，并输出**逐帧全链路分阶段耗时**。
 
 ---
 
 一个从零手写完整推理流水线的学习型项目：不依赖 OpenCV 的高层封装（`DetectionModel`），LetterBox 预处理、YOLOv8 输出解码、NMS 后处理全部自己实现。
 
-当前版本在检测能力之上补了两层工程化能力：**统一输入抽象**（`FrameReader` + 工厂）让同一套推理代码同时服务图片和视频；**分阶段性能观测**（`StageTimeTracker` + `ScopedTimer`）用 RAII 记录预处理 / 推理 / 后处理各自耗时 —— 既适合作为理解「深度学习模型部署」的最小可运行范例，也是一个观察设计模式与分阶段计时如何落地的小样本。
+当前版本在检测能力之上补了三层工程化能力：**统一输入抽象**（`FrameReader` + 工厂）让同一套推理代码同时服务图片和视频；**命令行与输出管道**（`--help` / `--version` / `--no-show` / `--dump`）让程序能脱离图形界面运行，并把逐帧检测结果落成 CSV；**全链路分阶段性能观测**（`StageTimeTracker` + `ScopedTimer`）用 RAII 记录读帧、推理链路、绘制与显示各自的耗时 —— 既适合作为理解「深度学习模型部署」的最小可运行范例，也是一个观察设计模式与分阶段计时如何落地的小样本。
 
 ---
 
@@ -44,13 +44,17 @@
 
 - **图片 / 视频统一输入**：`FrameReader` 抽象接口 + `FrameReaderFactory` 工厂按扩展名自动分派，`main` 只需一条帧循环
 	两者被同一个 `while (fr->read(frame))` 协议统一：`ImageFrameReader::read` 只成功一次（内部 `isUsed_` 标志），`VideoFrameReader::read` 逐帧读到 `VideoCapture` 返回 `false` 为止
+- **命令行接口**：`-h` / `--help`、`-v` / `--version`、`--no-show`、`--dump <CSV>`；参数错误时打印用法提示并退出，帮助 / 版本可独立于位置参数使用
+- **无头运行**：`--no-show` 不创建窗口、跳过绘制与 `imshow`，适用于服务器 / SSH，也便于只做批量落盘
+- **检测结果落盘**：`--dump` 按帧写出 CSV（`id,x,y,w,h,score`），无检测的帧写一行 `0,0,0,0,0.000` 哨兵值；文件生命周期由 `CSVSnapshot` 以 RAII 管理
 - **完整手写推理流水线**：LetterBox 预处理 → `blobFromImage` 归一化 → 前向推理 → 输出解码 → NMS 去重 → 结果绘制
 - **单类别检测**：只保留 COCO 的 `person` 类（`class_id = 0`），过滤其余 79 类
 - **坐标精确还原**：通过 `LetterBoxInfo` 记录缩放 / 填充量，将 640×640 网络坐标系下的框精确映射回原图
 - **集中式配置**：模型路径、源路径、置信度 / NMS 阈值、输入尺寸、类别号统一收敛到 `ProjConfig`
 - **模型只加载一次**：`PedestrianDetector` 在帧循环外构造，视频逐帧复用同一个 `cv::dnn::Net`
 - **零拷贝解码**：解码阶段用「包裹外部内存的 Mat 头」读取分数，避免逐框拷贝
-- **分阶段耗时统计**：`StageTimeTracker` 单例 + RAII 作用域计时（`STAGE_TIME_TRACKER_SCOPE`），逐帧输出「预处理 / 推理 / 后处理」的耗时与占比
+- **全链路分阶段耗时统计**：`StageTimeTracker` 单例 + RAII 作用域计时（`STAGE_TIME_TRACKER_SCOPE`），按 `EndToEnd → Read → InferChain → Draw → DisplayNWait` 的层级逐帧输出 Total / Avg / Ratio，其中 `InferChain` 再拆为 `Preprocess / Reason / Postprocess`
+- **冷启动与稳态分离**：首帧报表标记 `[Cold Start]`，之后标记 `[Steady State]`，避免窗口创建、首次解码等一次性开销混入稳定态读数
 - **大分辨率自适应显示**：显示宽度超过 1280 px 时窗口内等比缩小，检测与坐标还原仍在原图分辨率上完成
 
 ---
@@ -60,6 +64,10 @@
 ![视频截图运行示例](docs/PDExample.png)
 
 输入图片或视频跑一遍的效果：每帧用红框标出行人，框上方的文字是置信度标签 —— 图片与视频共用同一条推理流水线。
+
+![性能检测示例](docs/TestingExample.png)
+
+终端逐帧性能报表：`EndToEnd` 是整帧墙钟时间，`InferChain` 之下再拆出预处理 / 推理 / 后处理；所有 `Ratio` 均以 `EndToEnd` 为分母。
 
 ## 技术栈
 
@@ -71,7 +79,8 @@
 | 推理             | OpenCV DNN                                 | `readNetFromONNX` + `forward`，默认 OpenCV 后端 + CPU        |
 | 模型             | YOLOv8n（ONNX）                            | ultralytics COCO 预训练权重导出，输入 640×640，输出 `[1, 84, 8400]` |
 | 后处理           | 手写实现                                   | 输出解码、LetterBox 坐标逆变换、`cv::dnn::NMSBoxes` 去重     |
-| 性能观测         | C++17 `<chrono>` + RAII                    | `ScopedTimer` 作用域计时，`StageTimeTracker` 单例汇总并按帧输出 |
+| 性能观测         | C++17 `<chrono>` + RAII                    | 全链路作用域计时（`EndToEnd` / `Read` / `InferChain` / `Draw` / `DisplayNWait`），`StageTimeTracker` 单例汇总并按帧输出层级报表 |
+| 结果输出         | C++17 `<fstream>` / `<iomanip>`            | `--dump` 逐帧 CSV 落盘，`CSVSnapshot` 以 RAII 管理文件生命周期 |
 | 模型导出（可选） | Python 3.14 + ultralytics + PyTorch + onnx | 仅在重新导出 ONNX 时用到，不参与运行时                       |
 
 ## 环境依赖
@@ -172,16 +181,28 @@ cmake --build build -j
 
 # 视频
 ./build/pedestrian_detection_system models/yolov8n.onnx 视频路径
+
+# 无头运行，并把逐帧检测结果落盘
+./build/pedestrian_detection_system models/yolov8n.onnx 视频路径 --no-show --dump result.csv
 ```
+
+| 选项              | 说明                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `-h` / `--help`   | 显示用法与选项后退出                                                                                       |
+| `-v` / `--version` | 显示版本号后退出；不需要提供模型与源路径                                                                  |
+| `--no-show`       | 不创建显示窗口、跳过绘制与 `imshow`，适用于无头环境或只落盘；`Draw` / `DisplayNWait` 不会出现在报表中       |
+| `--dump <CSV>`    | 将逐帧检测结果写入 CSV（`id,x,y,w,h,score`；坐标基于原图；无检测的帧写一行 `0,0,0,0,0.000` 哨兵值）        |
+
+> `--dump` 的目标文件无法打开时只打印错误并继续检测，不会中断任务。
 
 - **图片模式**：弹窗显示标注结果，按 ESC 或任意键后程序结束。
 - **视频模式**：逐帧检测并实时显示（红框 + `person: 0.87` 形式的置信度标签），按 **ESC** 提前退出，视频播完自动结束。
-- **终端报表**：每帧结束后打印三阶段耗时表（见[性能统计](#性能统计)），与显示窗口相互独立。
-- **显示缩放**：源画面宽度超过 1280 px 时，窗口内等比缩小；检测框坐标仍基于原图，不受影响。
+- **终端报表**：每帧结束后打印全链路分阶段耗时表（见[性能统计](#性能统计)）；首帧标记 `[Cold Start]`，之后为 `[Steady State]`，与显示窗口相互独立。
+- **显示缩放**：源画面宽度超过 1280 px 时，窗口内等比缩小；检测框坐标仍基于原图，不受影响（`--no-show` 下不涉及缩放）。
 
-> **注意**：程序通过 `cv::imshow` 显示结果，需要图形界面环境（X11 / Wayland）。
+> **注意**：程序默认通过 `cv::imshow` 显示结果，需要图形界面环境（X11 / Wayland）。
 >
-> 在无头服务器或 SSH 环境中会失败，可改为 `cv::imwrite("result.jpg", frame)` 输出到文件。
+> 在无头服务器或 SSH 环境中请加 `--no-show`（可配合 `--dump` 落盘检测结果），程序不会创建窗口。
 
 ### 3. 按键
 
@@ -242,26 +263,37 @@ flowchart TD
     P3 -. "坐标逆变换依据" .-> O3
 ```
 
-> 三个阶段在 `PedestrianDetector::detect()` 中分别被 `STAGE_TIME_TRACKER_SCOPE(...)` 包裹；计时只覆盖推理链路本身，绘制、`imshow` 与 `waitKey` 不计入。
+> `PedestrianDetector::detect()` 内部用 `STAGE_TIME_TRACKER_SCOPE(...)` 分别计时 `Preprocess` / `Reason` / `Postprocess`；`main` 的帧循环把它们合并为 `InferChain`，并额外包裹 `EndToEnd` / `Read`，显示模式下再包裹 `Draw` / `DisplayNWait`。报表因此既能看整帧墙钟时间，也能下钻到子阶段。
 
 ---
 
 ## 性能统计
 
-每个输入帧走完 `detect()` 后，终端会打印一张分阶段耗时表：
+每帧结束（`EndToEnd` 作用域退出）后，终端会打印一张全链路分阶段耗时表：
 
 ```text
-vX.Y.Z Performance Metrics Report
-Stage          Total(ms)   Avg(ms)     Ratio
-预处理         12.34       12.34       8.21%
-推理           131.56      131.56      87.52%
-后处理         6.42        6.42        4.27%
-Total Time Spent: 150.32
+>>> [Steady State] Frame 3 <<<
+
+Performance Metrics Report
+Stage                Total(ms)   Avg(ms)     Ratio(%)
+EndToEnd             19.85       19.85       100.00%
+  Read               0.99        0.99        4.97%
+  InferChain         16.98       16.98       85.58%
+    Preprocess       1.33        1.33        6.68%
+    Reason           14.20       14.20       71.55%
+    Postprocess      1.14        1.14        5.72%
+  Draw               0.06        0.06        0.32%
+  DisplayNWait       1.80        1.80        9.08%
+Total Frame Latency(ms): 19.8463
 ```
 
+- **层级结构**：`EndToEnd` 是整帧墙钟时间；`Read` / `InferChain` / `Draw` / `DisplayNWait` 是它的四个子项，`InferChain` 再向下拆分 `Preprocess` / `Reason` / `Postprocess`。报表按固定顺序输出，子项用缩进表示层级。
+- **`Ratio` 的分母**：所有占比都以 `EndToEnd` 为分母，因此子阶段之间不构成互斥的 100% —— 例如 `Preprocess + Reason + Postprocess` 一并计入 `InferChain` 的时间。
+- **冷启动 vs 稳态**：首帧标记 `[Cold Start]`，包含窗口创建、首次读帧等一次性开销；后续帧标记 `[Steady State]`，更适合做优化前后对比。
+- **`--no-show` 下的报表**：绘制与显示被跳过，`Draw` / `DisplayNWait` 不会出现，只剩 `EndToEnd` / `Read` / `InferChain` 及其子阶段。
 - **实现方式**：`ScopedTimer` 构造时记录 `steady_clock` 起点，析构时把耗时交给 `StageTimeTracker` 单例；`STAGE_TIME_TRACKER_SCOPE("名称")` 宏在作用域内创建计时器，异常路径也能正确结算。
-- **统计窗口**：报表在每帧 `detect()` 结束后打印并清空，因此 `Total` 与 `Avg` 在同一帧内相等，`Ratio` 表示三个阶段之间的占比 —— 它回答的是「这一帧的时间花在哪」，不是整段视频的累计值或 FPS。
-- **读数的前提**：只在 `CMAKE_BUILD_TYPE=Release` 下有参考价值，Debug 构建的数字会被未优化代码显著放大。做优化前后对比时先固定构建类型，再看「推理」一栏。
+- **统计窗口**：报表在每帧结束后打印并清空，因此同一帧内 `Total` 与 `Avg` 相等；它回答的是「这一帧的时间花在哪」，不是整段视频的累计值或 FPS。
+- **读数的前提**：只在 `CMAKE_BUILD_TYPE=Release` 下有参考价值，Debug 构建的数字会被未优化代码显著放大。做优化前后对比时先固定构建类型，再看 `Reason` 一栏。
 
 ---
 
@@ -308,9 +340,9 @@ PedestrianDetectionSystem/
 │   ├── VideoFrameReader.hpp        # 视频源：封装 cv::VideoCapture，逐帧读取
 │   └── FrameReaderFactory.hpp      # 工厂：detectSourceType + createFrameReader
 ├── src/
-│   ├── main.cpp                    # 装配与帧循环：检测 → 绘制 → 输出耗时 → 显示
-│   ├── PedestrianDetector.cpp      # 核心实现：preprocess / postprocess / detect（含三阶段计时）
-│   ├── StageTimeTracker.cpp        # 分阶段计时汇总、按帧输出报表
+│   ├── main.cpp                    # 命令行解析 → 帧循环：检测 → CSV / 绘制 / 显示 → 逐帧耗时报表
+│   ├── PedestrianDetector.cpp      # 核心实现：preprocess / postprocess / detect（含 Preprocess / Reason / Postprocess 计时）
+│   ├── StageTimeTracker.cpp        # 全链路计时汇总、按固定层级顺序输出报表
 │   ├── ImageFrameReader.cpp
 │   ├── VideoFrameReader.cpp
 │   └── FrameReaderFactory.cpp      # 扩展名表 + switch 创建
@@ -325,7 +357,8 @@ PedestrianDetectionSystem/
 │   └── check_links.py              # 文档链接与锚点校验（CI 调用）
 ├── docs/
 │   ├── roadmap.md                  # 路线图：方向性说明（粗粒度，非承诺）
-│   └── PDExample.png               # 演示截图（README「演示」节引用）
+│   ├── PDExample.png               # 检测效果截图（README「演示」节引用）
+│   └── TestingExample.png          # 终端分阶段性能报表截图（README「演示」节引用）
 ├── .github/workflows/ci.yml        # CI：编译 + 冒烟 + 版本号一致性 + 文档链接
 ├── venv/                           # Python 虚拟环境（本地，不入库）
 └── build/                          # CMake 构建目录（本地，不入库）
@@ -341,8 +374,8 @@ PedestrianDetectionSystem/
 
 - 坏帧会让程序终止（无异常防护）
 - 视频不按原速播放
-- 无帧号 / 播放进度 / 实时 FPS（仅终端输出三阶段耗时，未做端到端帧率统计）
-- 结果只能经 `cv::imshow` 显示，无头环境不可用
+- 无帧号 / 播放进度 / 实时 FPS（报表已有 `EndToEnd` 逐帧耗时，但未做 FPS 统计或画面叠加）
+- 结果输出只有窗口显示与逐帧 CSV，尚无带框视频 / 标注图片导出
 - 按键控制少：无暂停 / 单帧步进 / 截图
 
 ### 暂时不考虑的方向
@@ -395,4 +428,4 @@ PedestrianDetectionSystem/
 
 ---
 
-*图片 + 视频 · 单类别 person · YOLOv8n ONNX + OpenCV DNN*
+*图片 + 视频 · 单类别 person · 无头运行 / CSV 落盘 · YOLOv8n ONNX + OpenCV DNN*
