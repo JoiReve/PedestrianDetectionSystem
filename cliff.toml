@@ -7,7 +7,7 @@
 #   git-cliff --bump                       由提交内容自动推断下一个版本号
 #
 # 发版流程（四步）
-#   1. 改 CMakeLists.txt 的 VERSION，以及 README.md 首屏的 **vx.y.z**（两者必须一致，CI 会校验）
+#   1. 改 CMakeLists.txt 的 VERSION
 #   2. git-cliff --unreleased --tag v0.2.1 -o CHANGELOG.md
 #   3. git add -A && git commit -m "chore(release): v0.2.1"
 #   4. git tag v0.2.1 && git push origin main --tags
