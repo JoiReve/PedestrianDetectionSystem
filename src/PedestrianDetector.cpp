@@ -1,18 +1,132 @@
 // PedestrianDetector.cpp
 #include "PedestrianDetector.hpp"
-#include <cmath>
-#include <stdexcept>
 #include "StageTimeTracker.hpp"
+#include "DnnEngine.hpp"
+
+#include <opencv2/core/utils/logger.hpp>
+#include <cmath>
+#include <cstdlib>
+#include <stdexcept>
+#include <string>
+#include <iostream>
+
+namespace {
+
+cv::dnn::EngineType toCVEngine(DnnEngine e) {
+    switch (e) {
+        case DnnEngine::Auto:
+            return cv::dnn::ENGINE_AUTO;
+        case DnnEngine::New:
+            return cv::dnn::ENGINE_NEW;
+        case DnnEngine::Classic:
+            return cv::dnn::ENGINE_CLASSIC;
+        case DnnEngine::Ort:
+            return cv::dnn::ENGINE_ORT;
+    }
+    return cv::dnn::ENGINE_AUTO;
+}
+
+struct EngineSelection{
+    DnnEngine requested;        // 原本想要调用的引擎
+    DnnEngine effective;        // 最终真正调用的引擎
+    bool env_forced = false;    // 是否是环境变量强制修改的
+    bool conflict = false;      // 环境变量和调用方请求是否矛盾
+    std::string env_value;      // 原始环境变量
+};
+
+EngineSelection resolveEngine(DnnEngine requested) {
+    EngineSelection es{requested, requested};
+
+    const char* raw = std::getenv("OPENCV_FORCE_DNN_ENGINE");
+    if(raw == nullptr || *raw == '\0') {
+        return es;
+    }
+
+    es.env_value = raw;
+
+    if(raw[0] < '1' || raw[0] > '4' || raw[1] != '\0') {
+        throw std::invalid_argument(
+            std::string("OPENCV_FORCE_DNN_ENGINE must be 1..4, got: ") + raw
+        );
+    }
+
+    int id = raw[0] - '0';
+
+    if(id == 3) {
+        return es;
+    }
+
+    es.env_forced = true;
+    switch (id) {
+        case 1:
+            es.effective = DnnEngine::Classic;
+            break;
+        case 2:
+            es.effective = DnnEngine::New;
+            break;
+        case 4:
+            es.effective = DnnEngine::Ort;
+            break;
+    }
+
+    es.conflict = (requested != DnnEngine::Auto && es.effective != requested);
+
+    return es;
+}
+
+void printEngineFingerprint(const EngineSelection& es, const cv::dnn::Net& net) {
+    const std::string info = cv::getBuildInformation();
+
+    auto findLine = [&](const char* key) -> std::string {
+        const size_t p = info.find(key);
+        if(p == std::string::npos) {
+            return "not listed";
+        }
+        const size_t e = info.find('\n', p);
+        return info.substr(p, e == std::string::npos ? std::string::npos : e - p);
+    };
+
+  #ifdef NDEBUG
+      const char* build = "Release";
+  #else
+      const char* build = "Debug";
+  #endif
+
+    std::cout << "[Engine]\n"
+          << "  OpenCV    = " << cv::getVersionString() << '\n'
+          << "  build     = " << build << '\n'
+          << "  requested = " << toStr(es.requested) << '\n'
+          << "  env       = " << (es.env_value.empty() ? "unset" : es.env_value) << '\n'
+          << "  effective = " << toStr(es.effective)
+                               << " (id=" << static_cast<int>(toCVEngine(es.effective)) << ")" << '\n'
+          << "  layers    = " << net.getLayerNames().size() << '\n'
+          << "  ort       = " << findLine("ONNX Runtime:") << '\n'
+          << "  cuda      = " << findLine("CUDA") << '\n';
+}
+
+} // namespace
 
 PedestrianDetector::PedestrianDetector(const ProjConfig &cfg)
     : cfg_(cfg) {
+    const EngineSelection es = resolveEngine(cfg_.dnn_engine);
+    if(es.conflict) {
+        CV_LOG_WARNING(nullptr,
+        "OPENCV_FORCE_DNN_ENGINE forces " << toStr(es.effective)
+        << ", overriding --engine=" << toStr(es.requested));
+    }
+    // 选择 Classic 模型
     // 加载 ONNX 模型
-    net_ = cv::dnn::readNetFromONNX(cfg_.model_path);
-    // 这里选择的是 OpenCV 后端 + CPU
-    // 设置推理后端
-    // net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-    // 设置计算设备
-    // net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    net_ = cv::dnn::readNetFromONNX(cfg_.model_path, toCVEngine(es.effective));
+
+    printEngineFingerprint(es, net_);
+
+    // Classic
+    if (es.effective == DnnEngine::Classic) {
+        // 设置推理后端
+        net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+        // 设置计算设备
+        net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    }
 }
 
 // 预处理

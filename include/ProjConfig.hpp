@@ -3,6 +3,8 @@
 #ifndef PROJ_CONFIG_HPP
 #define PROJ_CONFIG_HPP
 
+#include "DnnEngine.hpp"
+
 #include <string>
 
 struct ProjConfig {
@@ -20,6 +22,9 @@ struct ProjConfig {
 
     // 类别过滤
     int person_class_id = 0;
+
+    // DNN 引擎选择
+    DnnEngine dnn_engine = DnnEngine::Auto;
 };
 
 #endif // PROJ_CONFIG_HPP

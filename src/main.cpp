@@ -3,6 +3,7 @@
 #include "ProjConfig.hpp"
 #include "FrameReaderFactory.hpp"
 #include "StageTimeTracker.hpp"
+#include "DnnEngine.hpp"
 
 #include <iostream>
 #include <cstdio>
@@ -19,9 +20,7 @@ constexpr auto kWindowName = "Pedestrian Detector";
 
 constexpr double kMaxDisplayWidth = 1280.0;
 
-struct ProjOptions{
-    std::string model_path;
-    std::string source_path;
+struct CLIOptions{
     std::string dump_csv_path;  // 导出 CSV 的路径
     bool no_show = false;       // 无头模式
 };
@@ -33,18 +32,21 @@ enum class ParseResult {
 };
 
 // 命令行用法展示
-void printUsage(std::ostream& out, const char* program) {
+void printUsage(std::ostream& out, char* program) {
     out << "Usage: " << program << " [Options] <Model Path> <Source Path>\n"
         << "\n"
         << "Options:\n"
         << "  -h, --help              display this help and exit\n"
         << "  -v, --version           output version information and exit\n"
         << "  --no-show               do not open a display window\n"
-        << "  --dump <CSV Path>       write per-frame detections to CSV\n";
+        << "  --dump <CSV Path>       write per-frame detections to CSV\n"
+        << "  --engine <EngineType>   DNN Engine: auto, new, classic, ort (default: auto)\n"
+        << "\n"
+        << "Note: OPENCV_FORCE_DNN_ENGINE env var overrides --engine if set.\n";
 }
 
 // 解析命令行
-ParseResult parseArgs(int argc, char** argv, ProjOptions& po) {
+ParseResult parseArgs(int argc, char** argv, CLIOptions& po, ProjConfig& cfg) {
     std::vector<std::string> Position;
     for(int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -58,7 +60,7 @@ ParseResult parseArgs(int argc, char** argv, ProjOptions& po) {
             std::cout << "PedestrianDetectionSystem " << PROJECT_VERSION << "\n";
             return ParseResult::Success;
         }
-        // --no-show, --dump
+        // --no-show, --dump, --engine
         if (arg == "--no-show") {
             po.no_show = true;
         } else if (arg == "--dump") {
@@ -68,6 +70,17 @@ ParseResult parseArgs(int argc, char** argv, ProjOptions& po) {
                 return ParseResult::Failure;
             }
             po.dump_csv_path = argv[++i];
+        } else if (arg == "--engine") {
+            if (i + 1 >= argc) {
+                std::cerr << argv[0] << ": option '--engine' requires an argument\n";
+                std::cerr << "Try '" << argv[0] << " -h / --help' for more information.\n";
+                return ParseResult::Failure;
+            }
+            if (!fromStr(argv[++i], cfg.dnn_engine)) {
+                std::cerr << "Error: invalid --engine value.\n";
+                std::cerr << "Try '" << argv[0] << " -h / --help' for more information.\n";
+                return ParseResult::Failure;
+            }
         } else if (!arg.empty() && arg.front() == '-') {
             std::cerr << "Error: unknown option " << arg << '\n';
             std::cerr << "Try '" << argv[0] << " -h / --help' for more information.\n";
@@ -84,8 +97,8 @@ ParseResult parseArgs(int argc, char** argv, ProjOptions& po) {
         std::cerr << "Try '" << argv[0] << " --help' for more information.\n";
         return ParseResult::Failure;
     }
-    po.model_path  = Position[0];
-    po.source_path = Position[1];
+    cfg.model_path  = Position[0];
+    cfg.source_path = Position[1];
     return ParseResult::Continue;
 }
 
@@ -173,10 +186,7 @@ void printFrameReport(int id) {
     StageTimeTracker::getInstance().printReport();
 }
 
-int run(const ProjOptions& po) {
-    ProjConfig cfg;
-    cfg.model_path = po.model_path;
-    cfg.source_path = po.source_path;
+int run(const ProjConfig& cfg, const CLIOptions& o) {
     const SourceType type = detectSourceType(cfg.source_path);
     if (type == SourceType::Unknown) {
         std::cerr << "无法识别的源类型: " << cfg.source_path << "\n";
@@ -202,7 +212,7 @@ int run(const ProjOptions& po) {
         fr->release();
         return -1;
     }
-    CSVSnapshot cs(po.dump_csv_path);
+    CSVSnapshot cs(o.dump_csv_path);
     cv::Mat frame;
     const int delay = (type == SourceType::Image) ? 0 : 1;
     int id = 0;
@@ -225,9 +235,9 @@ int run(const ProjOptions& po) {
             }
 
             cs.writeCSV(d, id);
-            
+
             int key = -1;
-            if(!po.no_show) {
+            if(!o.no_show) {
                 drawDetections(frame, d);
                 {
                     STAGE_TIME_TRACKER_SCOPE("DisplayNWait");
@@ -253,14 +263,15 @@ int run(const ProjOptions& po) {
 
 
 int main(int argc, char **argv) {
-    ProjOptions po;
-    switch(parseArgs(argc, argv, po)) {
+    CLIOptions o;
+    ProjConfig cfg;
+    switch(parseArgs(argc, argv, o, cfg)) {
         case ParseResult::Success:
             return 0;
         case ParseResult::Failure:
             return 1;
         case ParseResult::Continue:
-            break;   
+            break;
     }
-    return run(po);
+    return run(cfg, o);
 }
