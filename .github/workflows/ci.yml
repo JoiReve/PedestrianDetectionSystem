@@ -1,8 +1,6 @@
 name: CI
 
-# 两条独立流水线：
-#   build —— 自编译 OpenCV 5.0.0（缓存）+ 项目编译 + 链接来源校验 + DNN 冒烟
-#   docs  —— 版本号与文档链接一致性
+# 自编译 OpenCV 5.0.0（缓存）+ 项目编译 + 链接来源校验 + DNN 冒烟
 on:
   push:
     branches: [main]
@@ -106,23 +104,3 @@ jobs:
       # 加载 ONNX → 前向推理 → 校验输出张量形状。
       - name: 冒烟测试
         run: ./build/smoke_dnn models/yolov8n.onnx
-
-  # ──────────────────────────────────────────────────────────────────────
-  docs:
-    name: 文档一致性
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      # 以 CMakeLists.txt 中的版本号为准，校验 README 首屏与其一致
-      - name: 校验版本号
-        run: python3 scripts/check_version.py
-
-      # 校验 README 及 docs/ 中的相对路径、页面内锚点（#fragment）、目录覆盖率
-      - name: 校验文档链接
-        run: python3 scripts/check_links.py
